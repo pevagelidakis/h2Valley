@@ -91,9 +91,9 @@ GROUPS = {
 }
 
 INSIGHTS = {
-    "temperature_2_m_above_gnd":        "Sinusoidal ACF peaking at lag 24 (r≈0.98). Diurnal heating cycle dominates. PACF cuts off after lag 12 → AR(12) residual structure.",
-    "relative_humidity_2_m_above_gnd":  "Mirror of temperature — peaks overnight, troughs mid-afternoon. Strong 24h period. PACF cuts off after lag 2 → AR(2).",
-    "mean_sea_level_pressure_MSL":      "Weak semi-diurnal (~12h) tidal oscillation on synoptic variability. ACF shows gentle peaks at lags 12 and 24.",
+    "temperature_2_m_above_gnd":        "Sinusoidal ACF peaking at lag 12. Diurnal heating cycle dominates. PACF cuts off after lag 12 → AR(12) residual structure.",
+    "relative_humidity_2_m_above_gnd":  "Mirror of temperature (peaks overnight), troughs mid-afternoon. Strong 24h period. PACF cuts off after lag 13 → AR(13).",
+    "mean_sea_level_pressure_MSL":      "Weak semi-diurnal (~12h) tidal oscillation on synoptic variability. PACF shows peaks at lags 31.",
     "total_precipitation_sfc":          "Near-zero ACF at all lags — highly intermittent. Near-white-noise at hourly resolution. Essentially unpredictable beyond lag 1.",
     "snowfall_amount_sfc":              "Highly sparse with near-zero ACF. Rare, episodic events dominated by synoptic patterns over days.",
     "total_cloud_cover_sfc":            "Moderate 24h cycle from sea-breeze and convective patterns. PACF cuts off ~lag 3. Explains cloud cover failure in Granger tests.",
@@ -1069,9 +1069,10 @@ DIAG_THEORY = html.Div([
                 "correlation between the sorted data and the expected Normal order statistics — W = 1 is perfect normality.",
                 "Test statistic:",
                 r"$$W = \frac{\left(\displaystyle\sum_{i=1}^{n} a_i x_{(i)}\right)^2}{\displaystyle\sum_{i=1}^{n}(x_i - \bar{x})^2}$$,"
-                "$$"
-                "\n\nwhere $x_{(i)}$ are the order statistics (sorted values), $\\bar{x}$ is the sample mean, "
-                "and $a_i$ are coefficients derived from the expected Normal order statistics.",
+                " where $a_i$ are coefficients derived from the expected Normal order statistics:"
+                r"$$(a_1, a_2, \ldots, a_n) = \frac{m^T V^{-1}}{\sqrt{m^T V^{-1} V^{-1} m}}$$,"
+                "$m$ is the vector of expected Normal order statistics, $V$ is their covariance matrix."
+                "\n\n$x_{(i)}$ are the order statistics (sorted values), and $\\bar{x}$ is the sample mean, ",
                 "The data come from a Normal distribution (W close to 1).",
                 "The data do NOT come from a Normal distribution.",
                 "W ranges from 0 to 1. Values close to 1 indicate normality. "
@@ -1087,26 +1088,27 @@ DIAG_THEORY = html.Div([
         # Row 2: JB + LB
         html.Div([
             _latex_card(
-                "Jarque-Bera Test", "JB", AMBER,
+                "Jarque-Bera Test","JB",AMBER,
                 "The Jarque-Bera test checks normality by measuring two specific features: "
-                "skewness (how asymmetric the distribution is — Normal distributions are symmetric) "
-                "and excess kurtosis (how heavy the tails are — Normal distributions have kurtosis = 3, "
-                "so excess kurtosis = kurtosis − 3 = 0). "
+                "skewness (how asymmetric the distribution is, accounting that Normal distributions are symmetric) "
+                "and excess kurtosis (how heavy the tails are, accounting that Normal distributions have kurtosis = 3, "
+                "so excess kurtosis = kurtosis - 3 = 0). "
                 "If both are close to zero, the data look Normal from a moments perspective.",
                 "Test statistic:",
-                r"$$JB = \frac{n}{6}\left(S^2 + \frac{(K-3)^2}{4}\right)$$"
-                "\n\nwhere $n$ is the sample size, $S = \\hat{\\mu}_3/\\hat{\\sigma}^3$ is the sample skewness, "
-                "and $K = \\hat{\\mu}_4/\\hat{\\sigma}^4$ is the sample kurtosis. "
+                r"$$JB = \frac{n-k}{6}\left(S^2 + \frac{(K-3)^2}{4}\right)$$"
+                "\n\nwhere $n$ is the sample size, $k$ is the number of regressors estimated, $S = \\hat{\\mu}_3/\\hat{\\sigma}^3$ is the sample skewness, "
+                "$K = \\hat{\\mu}_4/\\hat{\\sigma}^4$ is the sample kurtosis,"
+                " $\\hat{\\mu}_k$ is the k-th sample central moment, and $\\hat{\\sigma}^2$ is the sample variance."
                 "Under normality, $JB \\sim \\chi^2(2)$.",
                 "Skewness = 0 and excess kurtosis = 0 (data are Normal).",
                 "Skewness ≠ 0 or excess kurtosis ≠ 0 (data deviate from Normal).",
                 "JB = 0 means perfect normality. Larger JB means stronger evidence against normality. "
                 "Rule of thumb: |skew| < 0.5 is approximately symmetric; |excess kurtosis| < 1 is near-Normal tails. "
                 "Wind direction variables will show near-zero JB due to their circular but roughly symmetric nature.",
-                "Asymptotically chi-squared — unreliable for small samples (n < 30) where Type I error rate is high. "
+                "Asymptotically chi-squared, unreliable for small samples (n < 30) where Type I error rate is high. "
                 "Best used for large samples alongside KS and SW.",
                 caveats="The chi-squared approximation overstates significance for small samples. "
-                        "For solar data with n >> 1000, this is not a concern.",
+                        "For solar data with n >> 1000, this is not a concern."
             ),
             _latex_card(
                 "Ljung-Box Test", "LB", "#60a5fa",
