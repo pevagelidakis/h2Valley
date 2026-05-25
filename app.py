@@ -94,21 +94,21 @@ INSIGHTS = {
     "temperature_2_m_above_gnd":        "Sinusoidal ACF peaking at lag 12. Diurnal heating cycle dominates. PACF cuts off after lag 12 → AR(12) residual structure.",
     "relative_humidity_2_m_above_gnd":  "Mirror of temperature (peaks overnight), troughs mid-afternoon. Strong 24h period. PACF cuts off after lag 13 → AR(13).",
     "mean_sea_level_pressure_MSL":      "Weak semi-diurnal (~12h) tidal oscillation on synoptic variability. PACF shows peaks at lags 31.",
-    "total_precipitation_sfc":          "Near-zero ACF at all lags — highly intermittent. Near-white-noise at hourly resolution. Essentially unpredictable beyond lag 1.",
+    "total_precipitation_sfc":          "Near-zero ACF at all lags (highly intermittent). Near-white-noise at hourly resolution. Essentially unpredictable beyond lag 1.",
     "snowfall_amount_sfc":              "Highly sparse with near-zero ACF. Rare, episodic events dominated by synoptic patterns over days.",
     "total_cloud_cover_sfc":            "Moderate 24h cycle from sea-breeze and convective patterns. PACF cuts off ~lag 3. Explains cloud cover failure in Granger tests.",
-    "high_cloud_cover_high_cld_lay":    "Weaker ACF than total cloud — cirrus driven by upper-tropospheric dynamics independent of surface diurnal cycles.",
+    "high_cloud_cover_high_cld_lay":    "Weaker ACF than total cloud: cirrus driven by upper-tropospheric dynamics independent of surface diurnal cycles.",
     "medium_cloud_cover_mid_cld_lay":   "Slightly stronger diurnal structure than high clouds from afternoon convection. ACF decays quickly.",
     "low_cloud_cover_low_cld_lay":      "Stratus/fog shows persistent overnight ACF from nocturnal radiation cooling, burns off mid-morning.",
-    "shortwave_radiation_backwards_sfc":"Textbook diurnal sine wave — peaks at lag 24 (r≈0.995) and lag 48. Primary causal driver of solar generation.",
+    "shortwave_radiation_backwards_sfc":"Textbook diurnal sine wave (peaks at lag 24 with r≈0.995 and lag 48). Primary causal driver of solar generation.",
     "wind_speed_10_m_above_gnd":        "Moderate 24h periodicity from sea-breeze. PACF cuts off at lag 3 → low-order AR process.",
-    "wind_direction_10_m_above_gnd":    "Circular variable (0-360°) — ACF/PACF interpreted cautiously. Sea-breeze rotation near lag 24.",
+    "wind_direction_10_m_above_gnd":    "Circular variable (0-360°) (ACF/PACF interpreted cautiously). Sea-breeze rotation near lag 24.",
     "wind_speed_80_m_above_gnd":        "Stronger persistence than 10m from reduced surface friction. Smoother diurnal cycle.",
-    "wind_direction_80_m_above_gnd":    "Circular variable. Less influenced by surface obstacles — cleaner but noisy diurnal signal.",
+    "wind_direction_80_m_above_gnd":    "Circular variable. Less influenced by surface obstacles (cleaner but noisy diurnal signal).",
     "wind_speed_900_mb":                "Upper-level (~1km) wind shows weaker diurnal variation and stronger synoptic-scale persistence.",
-    "wind_direction_900_mb":            "Reflects synoptic steering flow. Circular variable — less diurnally driven.",
+    "wind_direction_900_mb":            "Reflects synoptic steering flow. Circular variable (less diurnally driven).",
     "wind_gust_10_m_above_gnd":         "Closely coupled to 10m wind (similar ACF) but higher variance and faster decorrelation from turbulent gusting.",
-    "angle_of_incidence":               "Geometrically determined — near-perfect 24h ACF. Clean AR(2) PACF cut-off identical to shortwave radiation.",
+    "angle_of_incidence":               "Geometrically determined (near-perfect 24h ACF). Clean AR(2) PACF cut-off identical to shortwave radiation.",
     "zenith":                           "Purely deterministic astronomical quantity. ACF is a cosine wave with period 24h. Zero stochastic component.",
     "azimuth":                          "Sweeps east→west every 24h. Circular nature (0°/360° wrap-around) may cause PACF numerical instability.",
 }
@@ -208,7 +208,7 @@ def sf(v):
 # ─────────────────────────────────────────────────────────────────────────────
 def load_data():
     if not CSV_PATH.exists():
-        raise FileNotFoundError(f"WARNING: {CSV_PATH} not found — generating synthetic demo data")
+        raise FileNotFoundError(f"WARNING: {CSV_PATH} not found: generating synthetic demo data")
 
     print("Loading data …")
     df = pd.read_csv(CSV_PATH)
@@ -742,7 +742,7 @@ def fig_granger_bar() -> go.Figure:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def fig_diag_overview() -> go.Figure:
-    """Heatmap: all 5 diagnostics × all variables — pass/fail overview."""
+    """Heatmap: all 5 diagnostics × all variables (pass/fail overview)."""
     tests   = ["KS", "Shapiro-Wilk", "Jarque-Bera", "Ljung-Box (white)", "HQC best lag"]
     ok_keys = ["ks_ok", "sw_ok", "jb_ok", "lb_ok"]
     ylabels = [LABELS.get(c, c) for c in AVAILABLE]
@@ -756,7 +756,7 @@ def fig_diag_overview() -> go.Figure:
             rt.append("✔ Pass" if v else "✘ Fail")
         z.append(rz); texts.append(rt)
 
-    # HQC best lag row (numeric, not pass/fail — encode 1..12 → 0..1)
+    # HQC best lag row (numeric, not pass/fail: encode 1..12 → 0..1)
     hqc_vals = [DIAG_RES[c]["best_hqc_lag"] for c in AVAILABLE]
     norm_hqc = [(v - 1) / (HQC_MAX_LAG - 1) for v in hqc_vals]
     z.append(norm_hqc)
@@ -1023,162 +1023,6 @@ def _latex_card(title, tag, color, plain_desc, formula_label, formula_latex,
     return html.Div(children, className="theory-card")
 
 
-DIAG_THEORY = html.Div([
-    html.Div("🔬 Diagnostic Tests — Theory & Interpretation", className="theory-title"),
-
-    # ── Intro paragraph ──
-    html.P([
-        "These five tests examine two fundamental properties of your time series residuals: ",
-        html.B("normality"), " (are the values bell-curve distributed?) and ",
-        html.B("autocorrelation"), " (do past values predict future values?). ",
-        "They are run on the raw series, not on model residuals. ",
-        "A failed normality test does not invalidate a model — many forecasting models are robust to non-normality — ",
-        "but it informs which distribution family to use and flags outliers or heavy tails.",
-    ], className="section-desc", style={"maxWidth":"100%","marginBottom":"20px"}),
-
-    html.Div([
-        # Row 1: KS + SW
-        html.Div([
-            _latex_card(
-                "Kolmogorov-Smirnov Test", "KS", ACCENT2,
-                "The KS test compares the empirical distribution function (EDF) of your data to a reference "
-                "distribution, which is the Gaussian distribution fitted with the sample mean and standard deviation. "
-                "The test statistic D is the maximum vertical gap between the data distribution and the aforementioned gaussian distribution. ",
-                # "Think of it as asking: 'If I stacked all my data values in order, how far does that staircase "
-                # "deviate from the smooth bell-curve ramp?' The test statistic D is the maximum vertical gap "
-                # "between the two curves.",
-                "Test statistic:",
-                r"$$D_n = \sup_x \left| F_n(x) - F(x) \right|$$"
-                "\n\nwhere $F_n(x)$ is the empirical CDF and $F(x)$ is the reference Normal CDF.",
-                "The data are drawn from a Normal distribution.",
-                "The data are NOT drawn from a Normal distribution.",
-                "A large D (and small p-value) means the data deviate significantly from Normal. "
-                "$p \geq 0.05$ means we cannot reject normality, the data are consistent with Normal.",
-                "Useful for any sample size. Less powerful than Shapiro-Wilk for small samples ($n < 50$). ",
-                # "For time series with diurnal patterns (e.g. solar radiation), non-normality is expected — "
-                # "the bimodal day/night structure will always fail this test.",
-                caveats="The KS test is general-purpose but less sensitive to deviations in the tails "
-                        "compared to Anderson-Darling. For the solar dataset, variables with heavy zeros "
-                        "(precipitation, snowfall) will fail by design.",
-            ),
-            _latex_card(
-                "Shapiro-Wilk Test", "SW", GREEN,
-                "The Shapiro-Wilk test measures how well the data fit a straight line on a Q-Q plot. "
-                "A Q-Q plot plots your data's quantiles against what they would be if the data were perfectly Normal. "
-                "If the points lie on a diagonal line, the data are Normal. The W statistic is the squared "
-                "correlation between the sorted data and the expected Normal order statistics — W = 1 is perfect normality.",
-                "Test statistic:",
-                r"$$W = \frac{\left(\displaystyle\sum_{i=1}^{n} a_i x_{(i)}\right)^2}{\displaystyle\sum_{i=1}^{n}(x_i - \bar{x})^2}$$,"
-                " where $a_i$ are coefficients derived from the expected Normal order statistics:"
-                r"$$(a_1, a_2, \ldots, a_n) = \frac{m^T V^{-1}}{\sqrt{m^T V^{-1} V^{-1} m}}$$,"
-                "$m$ is the vector of expected Normal order statistics, $V$ is their covariance matrix."
-                "\n\n$x_{(i)}$ are the order statistics (sorted values), and $\\bar{x}$ is the sample mean, ",
-                "The data come from a Normal distribution (W close to 1).",
-                "The data do NOT come from a Normal distribution.",
-                "W ranges from 0 to 1. Values close to 1 indicate normality. "
-                "p < 0.05 rejects normality. "
-                "For large samples (n > 5000), even tiny deviations become significant — "
-                "inspect the Q-Q plot visually alongside the p-value.",
-                "Considered the most powerful normality test for sample sizes up to ~5000. "
-                "For larger datasets the test is run on the first 5000 observations.",
-                caveats="Very large samples (n > 2000) will almost always reject normality even for "
-                        "near-Normal data due to the test's sensitivity. Always inspect the Q-Q plot.",
-            ),
-        ], className="theory-row"),
-        # Row 2: JB + LB
-        html.Div([
-            _latex_card(
-                "Jarque-Bera Test","JB",AMBER,
-                "The Jarque-Bera test checks normality by measuring two specific features: "
-                "skewness (how asymmetric the distribution is, accounting that Normal distributions are symmetric) "
-                "and excess kurtosis (how heavy the tails are, accounting that Normal distributions have kurtosis = 3, "
-                "so excess kurtosis = kurtosis - 3 = 0). "
-                "If both are close to zero, the data look Normal from a moments perspective.",
-                "Test statistic:",
-                r"$$JB = \frac{n-k}{6}\left(S^2 + \frac{(K-3)^2}{4}\right)$$"
-                "\n\nwhere $n$ is the sample size, $k$ is the number of regressors estimated, $S = \\hat{\\mu}_3/\\hat{\\sigma}^3$ is the sample skewness, "
-                "$K = \\hat{\\mu}_4/\\hat{\\sigma}^4$ is the sample kurtosis,"
-                " $\\hat{\\mu}_k$ is the k-th sample central moment, and $\\hat{\\sigma}^2$ is the sample variance."
-                "Under normality, $JB \\sim \\chi^2(2)$.",
-                "Skewness = 0 and excess kurtosis = 0 (data are Normal).",
-                "Skewness ≠ 0 or excess kurtosis ≠ 0 (data deviate from Normal).",
-                "JB = 0 means perfect normality. Larger JB means stronger evidence against normality. "
-                "Rule of thumb: |skew| < 0.5 is approximately symmetric; |excess kurtosis| < 1 is near-Normal tails. "
-                "Wind direction variables will show near-zero JB due to their circular but roughly symmetric nature.",
-                "Asymptotically chi-squared, unreliable for small samples (n < 30) where Type I error rate is high. "
-                "Best used for large samples alongside KS and SW.",
-                caveats="The chi-squared approximation overstates significance for small samples. "
-                        "For solar data with n >> 1000, this is not a concern."
-            ),
-            _latex_card(
-                "Ljung-Box Test", "LB", "#60a5fa",
-                "The Ljung-Box test checks whether the autocorrelations of a series are jointly zero up to lag m. "
-                "In plain terms: after fitting a model to your data, the residuals should be 'white noise' — "
-                "meaning no value should be predictable from previous values. "
-                "If autocorrelations are non-zero, the model has missed some structure in the data. "
-                "The Q statistic aggregates the squared autocorrelations across all lags up to m.",
-                "Test statistic:",
-                r"$$Q = n(n+2)\sum_{k=1}^{m}\frac{\hat{r}_k^2}{n-k}$$"
-                "\n\nwhere $\\hat{r}_k$ is the sample autocorrelation at lag $k$, $n$ is the sample size, "
-                "and $m$ is the number of lags tested. "
-                "Under the null, $Q \\sim \\chi^2(h)$ where $h = m - p - q$ for ARMA$(p,q)$ residuals.",
-                "No autocorrelation up to lag m — the series behaves like white noise.",
-                "Significant autocorrelation exists — the series (or model residuals) has exploitable structure.",
-                "Reported here at lags 6, 12, and 24. "
-                "Lag 24 is critical for meteorological data: a significant Q at lag 24 confirms strong diurnal periodicity. "
-                "p < 0.05 means autocorrelation is present — this is expected for all raw series in this dataset. "
-                "Green = white noise (no autocorrelation). Red = autocorrelation detected.",
-                "Run on raw series here — not model residuals. "
-                "All weather variables are expected to show significant autocorrelation (red) at lags 12 and 24 "
-                "due to the solar diurnal cycle.",
-                caveats="Degrees of freedom must be adjusted when applied to ARMA residuals: use h = m − p − q. "
-                        "The test is applied to the raw series here, so treat red results as descriptive, "
-                        "not as model failures.",
-            ),
-        ], className="theory-row"),
-        # Row 3: HQC (single card, full width via solo-card class)
-        html.Div([
-            _latex_card(
-                "Hannan-Quinn Criterion", "HQC", "#a78bfa",
-                "The Hannan-Quinn Criterion selects the optimal order (number of lags) for an autoregressive (AR) model. "
-                "Think of it as a 'complexity penalty' — adding more lags improves the fit, but HQC penalises "
-                "each additional parameter to prevent overfitting. "
-                "The best AR order is the one that minimises HQC. "
-                "This tells you: 'how many past hours of data are needed to best predict the next hour?'",
-                "Criterion:",
-                r"$$HQC(k) = -2\ln\hat{\sigma}_k^2 + 2k\ln\ln(n)$$"
-                "\n\nwhere $n$ is the sample size, $k$ is the number of AR parameters, "
-                "and $\\hat{\\sigma}_k^2$ is the residual variance of the AR$(k)$ model. "
-                "The double-logarithm penalty $\\ln\\ln(n)$ is weaker than BIC but stronger than AIC, "
-                "yielding consistent order selection for large samples.",
-                "The true AR order is 0 (no autoregressive structure).",
-                "An AR order k ≥ 1 minimises HQC — the series has memory.",
-                "The optimal lag displayed is the AR order p that minimises HQC across p = 1 to 12. "
-                "Solar radiation and temperature typically show HQC-optimal AR(2) or AR(3), "
-                "reflecting the strong diurnal carry-over. "
-                "Precipitation and snowfall often yield AR(1) due to sparse event structure.",
-                "HQC consistently selects a smaller order than AIC but typically larger than BIC. "
-                "It is the recommended criterion when n is large and overfitting is a concern.",
-                caveats="HQC is computed on the raw series, not first differences. "
-                        "For non-stationary series, the selected lag order should be interpreted with caution — "
-                        "apply ADF/PP first to confirm I(0) before interpreting the HQC-optimal AR order.",
-            ),
-            # Empty spacer card to maintain grid symmetry
-            html.Div(style={"width": "50%"}),
-        ], className="theory-row"),
-    ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
-
-    html.Div([
-        html.B("📋 Recommended workflow: ", style={"color": GREEN}),
-        "(1) Check normality with all three tests (KS, SW, JB) — agreement across tests gives confidence. "
-        "(2) Inspect the Q-Q plot visually — a few outliers can dominate the KS/SW statistics. "
-        "(3) Use Ljung-Box at lag 24 to confirm whether the diurnal cycle has been captured by your model. "
-        "(4) Use the HQC-optimal lag as the starting point for AR/ARIMA order selection — "
-        "then refine with AIC/BIC on the differenced series.",
-    ], className="tip-box"),
-
-], className="theory-section")
-
 VAR_OPTIONS  = [{"label": LABELS.get(c, c), "value": c} for c in AVAILABLE]
 
 PLOTLY_CFG = dict(
@@ -1261,33 +1105,199 @@ def theory_card(title, tag, color, paragraphs, math_eq=None, h0=None, h1=None):
     return html.Div(children, className="theory-card")
 
 
+DIAG_THEORY = html.Div([
+    html.Div("🔬 Diagnostic Tests: Theory & Interpretation", className="theory-title"),
+
+    # ── Intro paragraph ──
+    html.P([
+        "These five tests examine two fundamental properties of your time series residuals: ",
+        html.B("normality"), " (are the values bell-curve distributed?) and ",
+        html.B("autocorrelation"), " (do past values predict future values?). ",
+        "They are run on the raw series, not on model residuals. ",
+        "A failed normality test does not invalidate a model (many forecasting models are robust to non-normality) ",
+        "but it informs which distribution family to use and flags outliers or heavy tails.",
+    ], className="section-desc", style={"maxWidth":"100%","marginBottom":"20px"}),
+
+    html.Div([
+        # Row 1: KS + SW
+        html.Div([
+            _latex_card(
+                "Kolmogorov-Smirnov Test", "KS", ACCENT2,
+                "The KS test compares the empirical distribution function (EDF) of your data to a reference "
+                "distribution, which is the Gaussian distribution fitted with the sample mean and standard deviation. "
+                "The test statistic D is the maximum vertical gap between the data distribution and the aforementioned gaussian distribution. ",
+                "Test statistic:",
+                r"$$D_n = \sup_x \left| F_n(x) - F(x) \right|$$"
+                "\n\nwhere $F_n(x)$ is the empirical CDF and $F(x)$ is the reference Normal CDF.",
+                "The data are drawn from a Normal distribution.",
+                "The data are NOT drawn from a Normal distribution.",
+                "A large D (and small p-value) means the data deviate significantly from Normal. "
+                "$p \geq 0.05$ means we cannot reject normality, the data are consistent with Normal.",
+                "Useful for any sample size. Less powerful than Shapiro-Wilk for small samples ($n < 50$). ",
+                caveats="The KS test is general-purpose but less sensitive to deviations in the tails "
+                        "compared to Anderson-Darling. For the solar dataset, variables with heavy zeros "
+                        "(precipitation, snowfall) will fail by design.",
+            ),
+            _latex_card(
+                "Shapiro-Wilk Test", "SW", GREEN,
+                "The Shapiro-Wilk test measures how well the data fit a straight line on a Q-Q plot. "
+                "A Q-Q plot plots your data's quantiles against what they would be if the data were perfectly Normal. "
+                "If the points lie on a diagonal line, the data are Normal. The W statistic is the squared "
+                "correlation between the sorted data and the expected Normal order statistics (W = 1 is perfect normality).",
+                "Test statistic:",
+                r"$$W = \frac{\left(\displaystyle\sum_{i=1}^{n} a_i x_{(i)}\right)^2}{\displaystyle\sum_{i=1}^{n}(x_i - \bar{x})^2}$$,"
+                " where $a_i$ are coefficients derived from the expected Normal order statistics:"
+                r"$$(a_1, a_2, \ldots, a_n) = \frac{m^T V^{-1}}{\sqrt{m^T V^{-1} V^{-1} m}}$$,"
+                "$m$ is the vector of expected Normal order statistics, $V$ is their covariance matrix."
+                "\n\n$x_{(i)}$ are the order statistics (sorted values), and $\\bar{x}$ is the sample mean, ",
+                "The data come from a Normal distribution (W close to 1).",
+                "The data do NOT come from a Normal distribution.",
+                "W ranges from 0 to 1. Values close to 1 indicate normality. "
+                "p < 0.05 rejects normality. "
+                "For large samples (n > 5000), even tiny deviations become significant "
+                "(inspect the Q-Q plot visually alongside the p-value).",
+                "Considered the most powerful normality test for sample sizes up to ~5000. "
+                "For larger datasets the test is run on the first 5000 observations.",
+                caveats="Very large samples (n > 2000) will almost always reject normality even for "
+                        "near-Normal data due to the test's sensitivity. Always inspect the Q-Q plot.",
+            ),
+        ], className="theory-row"),
+        # Row 2: JB + LB
+        html.Div([
+            _latex_card(
+                "Jarque-Bera Test","JB",AMBER,
+                "The Jarque-Bera test checks normality by measuring two specific features: "
+                "skewness (how asymmetric the distribution is, accounting that Normal distributions are symmetric) "
+                "and excess kurtosis (how heavy the tails are, accounting that Normal distributions have kurtosis = 3, "
+                "so excess kurtosis = kurtosis - 3 = 0). "
+                "If both are close to zero, the data look Normal from a moments perspective.",
+                "Test statistic:",
+                r"$$JB = \frac{n-k}{6}\left(S^2 + \frac{(K-3)^2}{4}\right)$$"
+                "\n\nwhere $n$ is the sample size, $k$ is the number of regressors estimated, $S = \\hat{\\mu}_3/\\hat{\\sigma}^3$ is the sample skewness, "
+                "$K = \\hat{\\mu}_4/\\hat{\\sigma}^4$ is the sample kurtosis,"
+                " $\\hat{\\mu}_k$ is the k-th sample central moment, and $\\hat{\\sigma}^2$ is the sample variance."
+                "Under normality, $JB \\sim \\chi^2(2)$.",
+                "Skewness = 0 and excess kurtosis = 0 (data are Normal).",
+                "Skewness ≠ 0 or excess kurtosis ≠ 0 (data deviate from Normal).",
+                "JB = 0 means perfect normality. Larger JB means stronger evidence against normality. "
+                "Rule of thumb: |skew| < 0.5 is approximately symmetric; |excess kurtosis| < 1 is near-Normal tails. "
+                "Wind direction variables will show near-zero JB due to their circular but roughly symmetric nature.",
+                "Asymptotically chi-squared, unreliable for small samples (n < 30) where Type I error rate is high. "
+                "Best used for large samples alongside KS and SW.",
+                caveats="The chi-squared approximation overstates significance for small samples. "
+                        "For solar data with n >> 1000, this is not a concern."
+            ),
+            _latex_card(
+                "Ljung-Box Test", "LB", "#60a5fa",
+                "The Ljung-Box test checks whether the autocorrelations of a series are jointly zero up to lag m. "
+                "Namely, after fitting a model to your data, the residuals should be 'white noise' "
+                "(meaning no value should be predictable from previous values). "
+                "If autocorrelations are non-zero, the model has missed some structure in the data. "
+                "The Q statistic aggregates the squared autocorrelations across all lags up to m.",
+                "Test statistic:",
+                r"$$\mathcal{Q} = n(n+2)\sum_{k=1}^{m}\frac{\hat{\rho}_k^2}{n-k}$$"
+                "\n\nwhere $\\hat{\\rho}_k$ is the sample autocorrelation at lag $k$, $n$ is the sample size, "
+                "and $m$ is the number of lags tested. "
+                "Under the null, $\\mathcal{Q} \\sim \\chi^2(h)$ where $h = m - p - q$ for ARMA$(p,q)$ residuals."
+                "For significance level $a$, the critical region for rejection of the hypothesis of randomness is:"
+                "$$\mathcal{Q} > {\chi}_{1-a}^2(h)$$",
+                "No autocorrelation up to lag m (the series behaves like white noise).",
+                "Significant autocorrelation exists (the series, or model residuals, has exploitable structure).",
+                "Reported here at lags 6, 12, and 24. "
+                "Lag 24 is critical for meteorological data: a significant Q at lag 24 confirms strong diurnal periodicity. "
+                "p < 0.05 means autocorrelation is present (this is expected for all raw series in this dataset). "
+                "Green = white noise (no autocorrelation). Red = autocorrelation detected.",
+                "Run on raw series here (not model residuals). "
+                "All weather variables are expected to show significant autocorrelation (red) at lags 12 and 24 "
+                "due to the solar diurnal cycle.",
+                caveats="Degrees of freedom must be adjusted when applied to ARMA residuals: use h = m - p - q. "
+                        "The test is applied to the raw series here, so treat red results as descriptive, "
+                        "not as model failures.",
+            ),
+        ], className="theory-row"),
+        # Row 3: HQC (single card, full width via solo-card class)
+        html.Div([
+            _latex_card(
+                "Hannan-Quinn Criterion", "HQC", "#a78bfa",
+                "The Hannan-Quinn Criterion selects the optimal order (number of lags) for an autoregressive (AR) model. "
+                "Think of it as a 'complexity penalty' (adding more lags improves the fit) but HQC penalises "
+                "each additional parameter to prevent overfitting. "
+                "The best AR order is the one that minimises HQC. "
+                "This tells you: 'how many past hours of data are needed to best predict the next hour?'",
+                "Criterion:",
+                r"$$HQC(k) = -2\ln\hat{\sigma}_k^2 + 2k\ln\ln(n)$$"
+                "\n\nwhere $n$ is the sample size, $k$ is the number of AR parameters, "
+                "and $\\hat{\\sigma}_k^2$ is the residual variance of the AR$(k)$ model. "
+                "The double-logarithm penalty $\\ln\\ln(n)$ is weaker than BIC but stronger than AIC, "
+                "yielding consistent order selection for large samples.",
+                "The true AR order is 0 (no autoregressive structure).",
+                "An AR order k ≥ 1 minimises HQC (the series has memory).",
+                "The optimal lag displayed is the AR order p that minimises HQC across p = 1 to 12. "
+                "Solar radiation and temperature typically show HQC-optimal AR(2) or AR(3), "
+                "reflecting the strong diurnal carry-over. "
+                "Precipitation and snowfall often yield AR(1) due to sparse event structure.",
+                "HQC consistently selects a smaller order than AIC but typically larger than BIC. "
+                "It is the recommended criterion when n is large and overfitting is a concern.",
+                caveats="HQC is computed on the raw series, not first differences. "
+                        "For non-stationary series, the selected lag order should be interpreted with caution"
+                        " (apply ADF/PP first to confirm I(0) before interpreting the HQC-optimal AR order).",
+            ),
+            # Empty spacer card to maintain grid symmetry
+            html.Div(style={"width": "50%"}),
+        ], className="theory-row"),
+    ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
+
+    html.Div([
+        html.B("📋 Recommended workflow: ", style={"color": GREEN}),
+        "(1) Check normality with all three tests (KS, SW, JB) — agreement across tests gives confidence. "
+        "(2) Inspect the Q-Q plot visually — a few outliers can dominate the KS/SW statistics. "
+        "(3) Use Ljung-Box at lag 24 to confirm whether the diurnal cycle has been captured by your model. "
+        "(4) Use the HQC-optimal lag as the starting point for AR/ARIMA order selection — "
+        "then refine with AIC/BIC on the differenced series.",
+    ], className="tip-box"),
+
+], className="theory-section")
+
+
 STATION_THEORY = html.Div([
     html.Div("📖 Unit Root & Stationarity — Theory", className="theory-title"),
     html.Div([
         html.Div([
             theory_card("Augmented Dickey-Fuller", "ADF", ACCENT2,
-                ["The ADF test checks whether a time series has a 'unit root' — meaning it wanders randomly with no tendency to return to a mean. "
+                ["The ADF test checks whether a time series has a 'unit root' (the characteristic equation has a unit root,"
+                 " which can be translated into the behavior of the series wandering randomly with no tendency to return to a mean). "
                  "A unit root implies the series is non-stationary: its statistical properties (mean, variance) change over time, "
                  "which invalidates most classical forecasting models.",
                  "The test augments the basic Dickey-Fuller regression with lagged differences of the series to absorb any "
                  "serial correlation in the error term. The lag count is chosen automatically by AIC.",
-                 dcc.Markdown(r"Model: $\Delta Y_t = \alpha + \beta t + \gamma Y_{t-1} + \sum_{i=1}^{p}\delta_i \Delta Y_{t-i} + \varepsilon_t$", mathjax=True)],
-                None,
-                "γ = 0 → unit root present (non-stationary)",
-                "γ < 0 → series is stationary"),
+                 dcc.Markdown(r"Model: $\Delta Y_t = \mu  + \delta y_{t-1} + \sum_{i=1}^{p}\beta_i \Delta Y_{t-1} + \varepsilon_t$", mathjax=True)],
+                dcc.Markdown("""The intuition behind the test is that if the series is characterised by a unit root process, 
+                             then the lagged level of the series ($y_{t-1}$) will provide no relevant information in predicting the change in $y_t$ 
+                             besides the one obtained in the lagged changes ($\Delta y_{t-k}$). In this case, the $\delta=0$ and null hypothesis is not rejected.
+                             In contrast, when the process has no unit root, it is stationary and hence exhibits reversion to the mean - so the lagged level will provide
+                             relevant information in predicting the change of the series and the null hypothesis of a unit root will be rejected.""", mathjax=True),
+                dcc.Markdown("$\delta = 0$ → unit root present (non-stationary)", mathjax=True),
+                dcc.Markdown("$\delta \\neq 0$ → series is stationary", mathjax=True)),
             theory_card("KPSS Test", "KPSS", GREEN,
                 ["The KPSS test takes the opposite stance from ADF: its null hypothesis is that the series IS stationary. "
-                 "This makes it a powerful complement — if ADF rejects its null (evidence of stationarity) AND KPSS fails to "
-                 "reject its null (evidence of stationarity), you have strong convergent evidence.",
+                 "This makes it a powerful complement (if ADF rejects its null AND KPSS fails to "
+                 "reject its null, you have strong convergent evidence.)",
                  "The test decomposes the series into a deterministic trend, a random walk, and a stationary error. "
-                 "It then tests whether the variance of the random walk component equals zero.",
-                 dcc.Markdown(r"Model: $Y_t = \xi_t + r_t + \varepsilon_t$, where $r_t = r_{t-1} + u_t$", mathjax=True),
-                 "⚠ Note: KPSS has lower power as a unit-root test than ADF or PP. It was designed to test stationarity, "
+                 "It then tests whether the variance of the random walk component equals zero. The KPSS test, the absence of "
+                 "a unit root is not a proof of stationarity but, by design, of trend-stationarity."
+                 " This is an important distinction since it is possible for a time series to be non-stationary,"
+                 " have no unit root yet be trend-stationary. In both unit root and trend-stationary processes, "
+                 "the mean can be growing or decreasing over time; however, in the presence of a shock,"
+                 " trend-stationary processes are mean-reverting (i.e. transitory, the time series will converge again"
+                 " towards the growing mean, which was not affected by the shock) while unit-root processes have"
+                 " a permanent impact on the mean (i.e. no convergence over time).",
+                 dcc.Markdown(r"Model: $Y_t = \xi_t + r_t + \varepsilon_t$, where $r_t = r_{t-1} + u_t$", mathjax=True)],
+                "KPSS has lower power as a unit-root test than ADF or PP. It was designed to test stationarity, "
                  "not the presence of a unit root. Schmidt & Shin (1992) caution against using it as a primary unit-root test — "
-                 "use it alongside ADF and PP for a consistent picture."],
-                None,
-                "σ²ᵤ = 0 → series is stationary",
-                "σ²ᵤ > 0 → unit root / non-stationary"),
+                 "(use it alongside ADF and PP for a consistent picture). Keep in mind that KPSS is a test of trend-stationarity, not just stationarity." 
+                 "and the test statistic is a Lagrange multiplier based on the partial sum of residuals from the regression of $Y_t$ on a deterministic trend. ",
+                dcc.Markdown(r"$\sigma^2_u = 0$ → series is trend-stationary", mathjax=True),
+                dcc.Markdown(r"$\sigma^2_u \ge 0$ → unit root / non-stationary", mathjax=True)),
         ], className="theory-row"),
         html.Div([
             theory_card("Phillips-Perron", "PP", AMBER,
@@ -1352,9 +1362,9 @@ COINT_THEORY = html.Div([
         html.Div([
             theory_card("Error Correction Model", "ECM", AMBER,
                 ["Once cointegration is confirmed, an Error Correction Model (ECM) captures both short-run dynamics "
-                 "and the long-run equilibrium in one framework. The error correction term (Yₜ₋₁ − βXₜ₋₁) measures "
+                 "and the long-run equilibrium in one framework. The error correction term ($Y_{t-1} - \\beta X_{t-1}$) measures "
                  "how far the system deviated from equilibrium in the previous period.",
-                 "The coefficient γ on this term must be negative for the system to correct — a value of γ = −0.2 "
+                 "The coefficient $\\gamma$ on this term must be negative for the system to correct (a value of $\\gamma = -0.2$) "
                  "means 20% of any deviation is corrected each hour. For solar datasets, this speed of adjustment "
                  "reflects how quickly temperature responds to a radiation anomaly.",
                  dcc.Markdown(r"$\Delta Y_t = \alpha + \gamma(Y_{t-1} - \beta X_{t-1}) + \sum_i \delta_i \Delta X_{t-i} + \varepsilon_t$", mathjax=True)],
@@ -1378,11 +1388,11 @@ COINT_THEORY = html.Div([
 
 
 GRANGER_THEORY = html.Div([
-    html.Div("⚡ Granger Causality — Theory", className="theory-title"),
+    html.Div("⚡ Granger Causality: Theory", className="theory-title"),
     html.Div([
         html.Div([
             theory_card("Granger Causality", "GC", ACCENT2,
-                ["Granger causality is not causality in the philosophical sense — it is predictive causality. "
+                ["Granger causality is not causality in the philosophical sense (it is predictive causality). "
                  "We say X Granger-causes Y if knowing past values of X improves our forecast of Y, "
                  "beyond what past values of Y alone could tell us.",
                  "The test fits two VAR models: a restricted model (Y predicted only by its own past) and an "
@@ -1395,7 +1405,7 @@ GRANGER_THEORY = html.Div([
             theory_card("Key Caveats", "!", RED,
                 ["Granger causality has three well-known failure modes that every analyst must understand:",
                  "① Confounding: a hidden third variable Z may drive both X and Y, creating the illusion that X causes Y. "
-                 "Example: zenith angle drives both shortwave radiation and temperature — each appears to Granger-cause the other.",
+                 "Example: zenith angle drives both shortwave radiation and temperature (each appears to Granger-cause the other).",
                  "② Instantaneous effects: GC only captures lagged relationships. If X and Y move together within the "
                  "same hour (common in coupled physical systems), GC will miss the relationship entirely.",
                  "③ Non-linearity: standard GC assumes a linear VAR. Chaotic or threshold systems require nonlinear "
@@ -1408,7 +1418,7 @@ GRANGER_THEORY = html.Div([
                  "for variable X (across all lags) is jointly zero in the equation for Y.",
                  "This is more powerful than pairwise GC because the VAR accounts for the joint dynamics of all "
                  "included variables simultaneously, reducing the risk of spurious causality from omitted variables.",
-                 dcc.Markdown(r"VAR: $X_t = \sum_k A^{(k)} X_{t-k} + \varepsilon_t$ — Wald test on block $A^{(k)}_{ij}$", mathjax=True)],
+                 dcc.Markdown(r"VAR: $X_t = \sum_k A^{(k)} X_{t-k} + \varepsilon_t$ (Wald test on block $A^{(k)}_{ij}$)", mathjax=True)],
                 None,
                 "All elements of Aₖ[i,j] = 0 across all lags (X does not Granger-cause Y in the system)",
                 "At least one Aₖ[i,j] ≠ 0 (X Granger-causes Y within the VAR)"),
@@ -1763,7 +1773,7 @@ tab_exploration = dbc.Tab(
         plot_card([dcc.Graph(id="acf-pacf-plot", config=PLOTLY_CFG)]),
         html.Div(id="acf-insight"),
 
-        section_hdr("Time Series — Selected Variable"),
+        section_hdr("Time Series: Selected Variable"),
         html.Div(
             "Hourly observations (downsampled for rendering). Inspect trends, seasonality, and anomalies.",
             className="section-desc"
@@ -1819,7 +1829,7 @@ tab_cointegration = dbc.Tab(
     label="🔗  Cointegration",
     tab_id="tab-cointegration",
     children=html.Div([
-        section_hdr("Cointegration Tests — Engle-Granger"),
+        section_hdr("Cointegration Tests: Engle-Granger"),
         html.Div(
             f"Pairwise Engle-Granger cointegration test on {len(COINT_PAIRS)} physically motivated variable pairs. "
             "Cointegrated pairs share a long-run equilibrium: deviations are temporary and mean-reverting.",
@@ -1875,7 +1885,7 @@ tab_diagnostics = dbc.Tab(
     label="🔬  Diagnostics",
     tab_id="tab-diagnostics",
     children=html.Div([
-        section_hdr("Residual Diagnostics — Normality & Autocorrelation"),
+        section_hdr("Residual Diagnostics: Normality & Autocorrelation"),
         html.Div(
             "Five diagnostic tests applied to all variables: "
             "Kolmogorov-Smirnov, Shapiro-Wilk, and Jarque-Bera for normality; "
@@ -1909,7 +1919,7 @@ tab_diagnostics = dbc.Tab(
         # ── Variable selector + per-variable panel ──────────────────────
         html.Div([
             html.Div([
-                html.Label("Variable — full diagnostic panel"),
+                html.Label("Variable: full diagnostic panel"),
                 dcc.Dropdown(
                     id="diag-var", options=VAR_OPTIONS,
                     value=AVAILABLE[0], clearable=False,
