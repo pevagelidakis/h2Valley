@@ -11,7 +11,12 @@ from statsmodels.tsa.stattools import (
     acf, pacf,
     grangercausalitytests, coint,
 )
+from statsmodels.tsa.vector_ar.vecm import coint_johansen
+from arch.unitroot.cointegration import phillips_ouliaris
 from statsmodels.stats.diagnostic import acorr_ljungbox
+from statsmodels.stats.diagnostic import het_breuschpagan, acorr_breusch_godfrey
+from statsmodels.stats.stattools import durbin_watson
+import statsmodels.api as sm
 from statsmodels.tsa.ar_model import AutoReg
 from scipy import stats as sp_stats
 from datetime import datetime, timedelta
@@ -22,6 +27,7 @@ from plotly.subplots import make_subplots
 import dash
 from dash import dcc, html, Input, Output, callback
 import dash_bootstrap_components as dbc
+from map_tab import tab_map, register_map_callbacks
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONFIG
@@ -212,10 +218,11 @@ def load_data():
 
     print("Loading data …")
     df = pd.read_csv(CSV_PATH)
-    end_date = datetime.today()
-    start_date = end_date - timedelta(days=len(df)-1)
-    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-    df["date"] = date_range
+    # The series is hourly (diurnal cycles at lag 24, axes labelled "lag (hours)"),
+    # so stamp an hourly DatetimeIndex. `periods=` guarantees the index length
+    # matches the number of rows regardless of any end/start rounding.
+    end_date = datetime.today().replace(minute=0, second=0, microsecond=0)
+    df["date"] = pd.date_range(end=end_date, periods=len(df), freq="h")
     df = df.set_index("date")
     return df
 
@@ -279,6 +286,69 @@ for c1, c2 in COINT_PAIRS:
     )
     print(f"  {key[:55]:55s}  p={pf(eg[1])}")
 
+# ── Johansen Cointegration ────────────────────────────────────────────────────
+print("Running Johansen cointegration tests …")
+JOHANSEN_RES: dict = {}
+for c1, c2 in COINT_PAIRS:
+    if c1 not in DF.columns or c2 not in DF.columns:
+        continue
+    s1, s2 = DF[c1].dropna().values, DF[c2].dropna().values
+    n = min(len(s1), len(s2))
+    data2 = np.column_stack([s1[:n], s2[:n]])
+    key = f"{LABELS[c1]} ↔ {LABELS[c2]}"
+    try:
+        jres = coint_johansen(data2, det_order=0, k_ar_diff=1)
+        # Trace statistics and 5% critical values
+        trace_stat0  = float(jres.lr1[0])   # H0: rank=0
+        trace_stat1  = float(jres.lr1[1])   # H0: rank<=1
+        trace_crit0  = float(jres.cvt[0, 1])  # 5% crit, rank=0
+        trace_crit1  = float(jres.cvt[1, 1])  # 5% crit, rank<=1
+        # Max-eigenvalue statistics
+        maxeig_stat0 = float(jres.lr2[0])
+        maxeig_stat1 = float(jres.lr2[1])
+        maxeig_crit0 = float(jres.cvm[0, 1])
+        maxeig_crit1 = float(jres.cvm[1, 1])
+        # Determine rank (number of cointegrating vectors)
+        rank = 0
+        if trace_stat0 > trace_crit0:
+            rank = 1
+        if trace_stat1 > trace_crit1:
+            rank = 2
+        sig = rank >= 1
+        JOHANSEN_RES[key] = dict(
+            c1=c1, c2=c2, label1=LABELS[c1], label2=LABELS[c2],
+            trace_stat0=trace_stat0, trace_stat1=trace_stat1,
+            trace_crit0=trace_crit0, trace_crit1=trace_crit1,
+            maxeig_stat0=maxeig_stat0, maxeig_stat1=maxeig_stat1,
+            maxeig_crit0=maxeig_crit0, maxeig_crit1=maxeig_crit1,
+            rank=rank, sig=sig,
+        )
+        print(f"  {key[:55]:55s}  rank={rank}  trace0={trace_stat0:.2f} (crit={trace_crit0:.2f})")
+    except Exception as e:
+        print(f"  {key[:55]:55s}  ERROR: {e}")
+
+# ── Phillips-Ouliaris Cointegration ───────────────────────────────────────────
+print("Running Phillips-Ouliaris cointegration tests …")
+PO_RES: dict = {}
+for c1, c2 in COINT_PAIRS:
+    if c1 not in DF.columns or c2 not in DF.columns:
+        continue
+    s1, s2 = DF[c1].dropna().values, DF[c2].dropna().values
+    n = min(len(s1), len(s2))
+    key = f"{LABELS[c1]} ↔ {LABELS[c2]}"
+    try:
+        po      = phillips_ouliaris(s1[:n], s2[:n], trend="c", test_type="Zt")
+        po_stat = float(po.stat)
+        po_pval = float(po.pvalue)
+        sig     = po_pval < THRES
+        PO_RES[key] = dict(
+            c1=c1, c2=c2, label1=LABELS[c1], label2=LABELS[c2],
+            stat=po_stat, p=po_pval, sig=sig,
+        )
+        print(f"  {key[:55]:55s}  Zt={po_stat:.4f}  p={pf(po_pval)}")
+    except Exception as e:
+        print(f"  {key[:55]:55s}  ERROR: {e}")
+
 # ── Granger ──────────────────────────────────────────────────────────────────
 print("Running Granger causality tests …")
 GRANGER_RES: dict = {}
@@ -305,6 +375,8 @@ print("All tests done ✔")
 
 n_stat = sum(1 for c in AVAILABLE if STAT_RES[c]["adf_ok"] or STAT_RES[c]["pp_ok"])
 n_co   = sum(1 for v in COINT_RES.values()   if v["sig"])
+n_joh  = sum(1 for v in JOHANSEN_RES.values() if v["sig"])
+n_po   = sum(1 for v in PO_RES.values()        if v["sig"])
 n_gc   = sum(1 for v in GRANGER_RES.values() if v["sig"])
 
 # ── Diagnostics: KS, Shapiro-Wilk, Jarque-Bera, Ljung-Box, Hannan-Quinn ────
@@ -377,6 +449,61 @@ n_normal_ks = sum(1 for c in AVAILABLE if DIAG_RES[c]["ks_ok"])
 n_normal_sw = sum(1 for c in AVAILABLE if DIAG_RES[c]["sw_ok"])
 n_normal_jb = sum(1 for c in AVAILABLE if DIAG_RES[c]["jb_ok"])
 n_white_lb  = sum(1 for c in AVAILABLE if DIAG_RES[c]["lb_ok"])
+
+# ── Regression-residual diagnostics: Breusch-Pagan, Breusch-Godfrey, Durbin-Watson ──
+#   These three classical tests operate on the residuals of a regression, so for each
+#   variable we fit a simple model — a constant plus a linear time trend
+#   (y_t = α + β·t + e_t) — and test its residuals e_t for:
+#     · heteroskedasticity   → Breusch-Pagan
+#     · serial correlation   → Breusch-Godfrey (up to lag p) and Durbin-Watson (lag 1)
+print("Running regression-residual diagnostics …")
+REGDIAG_RES: dict = {}
+BG_LAGS = 12   # Breusch-Godfrey: test serial correlation up to this lag
+
+for col in AVAILABLE:
+    s = DF[col].dropna().values
+    n = len(s)
+    trend = np.arange(n, dtype=float)
+    X   = sm.add_constant(trend)        # design matrix: [const, time-trend]
+    ols = sm.OLS(s, X).fit()
+    resid = ols.resid
+
+    # Durbin-Watson — first-order serial correlation (≈2 none, <2 positive, >2 negative)
+    dw = float(durbin_watson(resid))
+
+    # Breusch-Godfrey — serial correlation up to BG_LAGS (LM test)
+    try:
+        bg_lm, bg_lmp, bg_f, bg_fp = acorr_breusch_godfrey(ols, nlags=BG_LAGS)
+    except Exception:
+        bg_lm = bg_lmp = bg_f = bg_fp = float("nan")
+
+    # Breusch-Pagan — heteroskedasticity of residuals w.r.t. the regressors (LM test)
+    try:
+        bp_lm, bp_lmp, bp_f, bp_fp = het_breuschpagan(resid, ols.model.exog)
+    except Exception:
+        bp_lm = bp_lmp = bp_f = bp_fp = float("nan")
+
+    REGDIAG_RES[col] = dict(
+        # Breusch-Pagan (H0: homoskedastic → fail-to-reject = "ok")
+        bp_stat=float(bp_lm), bp_p=float(bp_lmp),
+        bp_f=float(bp_f),     bp_fp=float(bp_fp),
+        bp_ok=bool(bp_lmp >= THRES),
+        # Breusch-Godfrey (H0: no serial correlation → fail-to-reject = "ok")
+        bg_stat=float(bg_lm), bg_p=float(bg_lmp),
+        bg_f=float(bg_f),     bg_fp=float(bg_fp),
+        bg_lags=int(BG_LAGS),
+        bg_ok=bool(bg_lmp >= THRES),
+        # Durbin-Watson (no p-value; ≈2 = no first-order serial correlation)
+        dw_stat=dw,
+        dw_ok=bool(1.5 <= dw <= 2.5),
+    )
+    print(f"  {LABELS.get(col, col):35s}  BP p={pf(bp_lmp)}  BG p={pf(bg_lmp)}  DW={dw:.3f}")
+
+print("Regression-residual diagnostics done ✔")
+
+n_homosk    = sum(1 for c in AVAILABLE if REGDIAG_RES[c]["bp_ok"])
+n_nocorr_bg = sum(1 for c in AVAILABLE if REGDIAG_RES[c]["bg_ok"])
+n_dw_ok     = sum(1 for c in AVAILABLE if REGDIAG_RES[c]["dw_ok"])
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  PLOTLY FIGURE BUILDERS
@@ -652,6 +779,188 @@ def fig_coint_pvals() -> go.Figure:
     return fig
 
 
+def fig_johansen_bars() -> go.Figure:
+    """Grouped bar chart: Johansen trace statistic vs 5% critical value for each pair."""
+    if not JOHANSEN_RES:
+        return go.Figure()
+    keys   = list(JOHANSEN_RES.keys())
+    sigs   = [JOHANSEN_RES[k]["sig"] for k in keys]
+    colors = [GREEN if s else RED for s in sigs]
+    labels = [
+        f"{JOHANSEN_RES[k]['label1']}<br><span style='opacity:.7'>↔</span> {JOHANSEN_RES[k]['label2']}"
+        for k in keys
+    ]
+    trace_s  = [JOHANSEN_RES[k]["trace_stat0"] for k in keys]
+    trace_c  = [JOHANSEN_RES[k]["trace_crit0"] for k in keys]
+    maxeig_s = [JOHANSEN_RES[k]["maxeig_stat0"] for k in keys]
+    maxeig_c = [JOHANSEN_RES[k]["maxeig_crit0"] for k in keys]
+    hover = [
+        f"<b>{k}</b><br>"
+        f"Trace(r=0): {sf(ts)}  (5% crit: {sf(tc)})<br>"
+        f"MaxEig(r=0): {sf(ms)}  (5% crit: {sf(mc)})<br>"
+        f"Rank: {JOHANSEN_RES[k]['rank']}<br>"
+        f"{'Cointegrated ✔' if sg else 'Not cointegrated ✘'}<extra></extra>"
+        for k, ts, tc, ms, mc, sg in zip(keys, trace_s, trace_c, maxeig_s, maxeig_c, sigs)
+    ]
+    idx = sorted(range(len(keys)), key=lambda i: trace_s[i], reverse=True)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=[labels[i] for i in idx],
+        y=[trace_s[i] for i in idx],
+        name="Trace statistic",
+        marker_color=[colors[i] for i in idx],
+        marker_line=dict(color=BORDER, width=1),
+        hovertemplate=[hover[i] for i in idx],
+        text=[f"r={JOHANSEN_RES[keys[i]]['rank']}" for i in idx],
+        textposition="outside",
+        textfont=dict(size=9, color=MUTED2, family=FONT_MONO),
+    ))
+    fig.add_trace(go.Scatter(
+        x=[labels[i] for i in idx],
+        y=[trace_c[i] for i in idx],
+        name="5% critical value",
+        mode="markers",
+        marker=dict(color=AMBER, size=8, symbol="line-ew", line=dict(width=2, color=AMBER)),
+        hovertemplate="5% crit: %{y:.2f}<extra></extra>",
+    ))
+    ax_kw = dict(**_AX, tickfont=dict(size=9, color=MUTED2, family=FONT_MONO))
+    fig.update_xaxes(**ax_kw, tickangle=35)
+    fig.update_yaxes(**ax_kw, title=dict(text="Trace statistic (H₀: rank=0)", standoff=6))
+    fig.update_layout(**_layout(
+        height=500,
+        margin=dict(t=46, b=170, l=70, r=20),
+        showlegend=True,
+        legend=dict(
+            orientation="h", x=0.01, y=1.08,
+            font=dict(size=11, color=MUTED2, family=FONT_MONO),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        title=dict(text="Johansen Cointegration  ·  Trace Statistics (H₀: rank=0)  ·  amber marker = 5% critical value",
+                   font=dict(size=13, color=TEXT), x=0.01),
+        bargap=0.32,
+    ))
+    return fig
+
+
+def fig_johansen_rank_heatmap() -> go.Figure:
+    """Heatmap showing Johansen rank (0, 1, 2) for each pair."""
+    if not JOHANSEN_RES:
+        return go.Figure()
+    keys   = list(JOHANSEN_RES.keys())
+    ranks  = [JOHANSEN_RES[k]["rank"] for k in keys]
+    labels = [f"{JOHANSEN_RES[k]['label1']} ↔ {JOHANSEN_RES[k]['label2']}" for k in keys]
+    rank_colors = {0: "rgba(244,115,110,0.55)", 1: "rgba(79,142,247,0.6)", 2: "rgba(45,212,160,0.7)"}
+    colors = [rank_colors.get(r, MUTED) for r in ranks]
+    rank_labels = {0: "No coint.", 1: "1 vector", 2: "2 vectors"}
+    fig = go.Figure(go.Bar(
+        x=labels,
+        y=ranks,
+        marker_color=colors,
+        marker_line=dict(color=BORDER, width=1),
+        text=[rank_labels.get(r, str(r)) for r in ranks],
+        textposition="outside",
+        textfont=dict(size=9, color=MUTED2, family=FONT_MONO),
+        hovertemplate="%{x}<br>Rank: %{y}<extra></extra>",
+        showlegend=False,
+    ))
+    ax_kw = dict(**_AX, tickfont=dict(size=9, color=MUTED2, family=FONT_MONO))
+    fig.update_xaxes(**ax_kw, tickangle=35)
+    fig.update_yaxes(**ax_kw,
+                     title=dict(text="Cointegration rank", standoff=5),
+                     tickvals=[0, 1, 2],
+                     ticktext=["0  (none)", "1  (one vector)", "2  (two vectors)"])
+    fig.update_layout(**_layout(
+        height=380,
+        margin=dict(t=40, b=170, l=80, r=20),
+        title=dict(text="Johansen Cointegration  ·  Estimated Rank per Pair",
+                   font=dict(size=13, color=TEXT), x=0.01),
+        bargap=0.35,
+    ))
+    return fig
+
+
+def fig_po_bars() -> go.Figure:
+    """Horizontal bar chart of Phillips-Ouliaris Z(t) statistics."""
+    if not PO_RES:
+        return go.Figure()
+    keys   = list(PO_RES.keys())
+    stats_ = [PO_RES[k]["stat"]  for k in keys]
+    pvals  = [PO_RES[k]["p"]     for k in keys]
+    sigs   = [PO_RES[k]["sig"]   for k in keys]
+    colors = [GREEN if s else RED for s in sigs]
+    labels = [
+        f"{PO_RES[k]['label1']}<br><span style='opacity:.7'>↔</span> {PO_RES[k]['label2']}"
+        for k in keys
+    ]
+    hover = [
+        f"<b>{k}</b><br>Z(t): {sf(s)}<br>p={pf(p)}<br>"
+        f"{'Cointegrated ✔' if sg else 'Not cointegrated ✘'}<extra></extra>"
+        for k, s, p, sg in zip(keys, stats_, pvals, sigs)
+    ]
+    idx = sorted(range(len(keys)), key=lambda i: stats_[i])
+    fig = go.Figure(go.Bar(
+        x=[stats_[i] for i in idx],
+        y=[labels[i] for i in idx],
+        orientation="h",
+        marker_color=[colors[i] for i in idx],
+        marker_line=dict(color=BORDER, width=1),
+        hovertemplate=[hover[i] for i in idx],
+        text=[f"p={pf(pvals[i])}" for i in idx],
+        textposition="outside",
+        textfont=dict(size=10, color=MUTED2, family=FONT_MONO),
+        showlegend=False,
+    ))
+    ax_kw = dict(**_AX, tickfont=dict(size=10, color=MUTED2, family=FONT_MONO))
+    fig.update_xaxes(**ax_kw, title=dict(
+        text="PO Z(t) statistic  (more negative = stronger cointegration)", standoff=6))
+    fig.update_yaxes(**ax_kw)
+    fig.update_layout(**_layout(
+        height=500, margin=dict(t=46, b=50, l=280, r=90),
+        title=dict(text="Phillips-Ouliaris  ·  Z(t) Statistics",
+                   font=dict(size=14, color=TEXT), x=0.01),
+        bargap=0.28,
+    ))
+    return fig
+
+
+def fig_po_pvals() -> go.Figure:
+    """Scatter plot of Phillips-Ouliaris p-values."""
+    if not PO_RES:
+        return go.Figure()
+    keys   = list(PO_RES.keys())
+    pvals  = [PO_RES[k]["p"]   for k in keys]
+    sigs   = [PO_RES[k]["sig"] for k in keys]
+    labels = [f"{PO_RES[k]['label1']} ↔ {PO_RES[k]['label2']}" for k in keys]
+    colors = [GREEN if s else RED for s in sigs]
+    fig = go.Figure(go.Scatter(
+        x=list(range(len(keys))), y=pvals,
+        mode="markers+text",
+        marker=dict(color=colors, size=13, line=dict(color=BORDER, width=1)),
+        text=[f"p={pf(p)}" for p in pvals],
+        textposition="top center",
+        textfont=dict(size=9, color=MUTED2, family=FONT_MONO),
+        hovertext=labels,
+        hovertemplate="%{hovertext}<br>p=%{y:.4f}<extra></extra>",
+        showlegend=False,
+    ))
+    fig.add_hline(y=0.05, line=dict(color=AMBER, width=1.5, dash="dot"),
+                  annotation_text="  α = 0.05",
+                  annotation_font=dict(color=AMBER, size=10))
+    ax_kw = dict(**_AX, tickfont=dict(size=10, color=MUTED2, family=FONT_MONO))
+    fig.update_xaxes(**ax_kw,
+                     tickvals=list(range(len(keys))),
+                     ticktext=[str(i+1) for i in range(len(keys))],
+                     title=dict(text="pair index", standoff=5))
+    fig.update_yaxes(**ax_kw, title=dict(text="p-value", standoff=5),
+                     range=[-0.05, 1.05])
+    fig.update_layout(**_layout(
+        height=320, margin=dict(t=40, b=50, l=60, r=20),
+        title=dict(text="Phillips-Ouliaris  ·  p-values  ·  green = cointegrated at 5%",
+                   font=dict(size=13, color=TEXT), x=0.01),
+    ))
+    return fig
+
+
 def fig_granger_heatmap() -> go.Figure:
     if not GRANGER_RES:
         return go.Figure()
@@ -787,7 +1096,6 @@ def fig_diag_overview() -> go.Figure:
     ))
     return fig
 
-## FIX THIS ISSUE: IT GIVES BACK MORE THAN A SINGLE DOT FOR EACH VARIABLE, PROBABLY BECAUSE OF THE WAY THE DATA IS STRUCTURED. NEED TO CHECK THE DATA STRUCTURE AND ENSURE THAT ONLY ONE DOT PER VARIABLE IS PLOTTED, REPRESENTING THE KS STATISTIC, SW STATISTIC, SKEWNESS, KURTOSIS, AND JB RESULT FOR THAT VARIABLE.
 def fig_diag_normality_scatter() -> go.Figure:
     """Bubble chart: KS stat vs SW stat, bubble size = |skew|, color = JB pass/fail."""
     cols   = AVAILABLE
@@ -813,7 +1121,7 @@ def fig_diag_normality_scatter() -> go.Figure:
             color=colors, size=[10 + 20*min(s, 3)/3 for s in skews],
             line=dict(color=BORDER, width=1), opacity=0.85,
         ),
-        text=[LABELS.get(c, c).split(" ")[0] for c in cols],
+        text=[LABELS.get(c, c) for c in cols],
         textfont=dict(size=8, color=MUTED2),
         textposition="top center",
         hovertemplate=hover,
@@ -993,6 +1301,137 @@ def fig_diag_variable(col: str) -> go.Figure:
     return fig
 
 
+def fig_regdiag_overview() -> go.Figure:
+    """Heatmap: Breusch-Pagan / Breusch-Godfrey / Durbin-Watson × all variables."""
+    tests   = ["Breusch-Pagan (homosk.)", "Breusch-Godfrey (no serial)", "Durbin-Watson (≈2)"]
+    ylabels = [LABELS.get(c, c) for c in AVAILABLE]
+    z, texts, cdata = [], [], []
+
+    # ── Breusch-Pagan row ──
+    rz, rt, rc = [], [], []
+    for c in AVAILABLE:
+        d  = REGDIAG_RES[c]
+        rz.append(1 if d["bp_ok"] else 0)
+        rt.append("✔ Homosk." if d["bp_ok"] else "✘ Hetero")
+        rc.append(f"Breusch-Pagan<br>LM={sf(d['bp_stat'])}  ·  p={pf(d['bp_p'])}")
+    z.append(rz); texts.append(rt); cdata.append(rc)
+
+    # ── Breusch-Godfrey row ──
+    rz, rt, rc = [], [], []
+    for c in AVAILABLE:
+        d  = REGDIAG_RES[c]
+        rz.append(1 if d["bg_ok"] else 0)
+        rt.append("✔ No serial" if d["bg_ok"] else "✘ Serial")
+        rc.append(f"Breusch-Godfrey (p≤{d['bg_lags']})<br>LM={sf(d['bg_stat'])}  ·  p={pf(d['bg_p'])}")
+    z.append(rz); texts.append(rt); cdata.append(rc)
+
+    # ── Durbin-Watson row (encode closeness to 2 → 0..1) ──
+    rz, rt, rc = [], [], []
+    for c in AVAILABLE:
+        dw = REGDIAG_RES[c]["dw_stat"]
+        rz.append(max(0.0, 1 - min(abs(dw - 2) / 2, 1)))
+        rt.append(f"DW={dw:.2f}")
+        tag = ("positive autocorr." if dw < 1.5 else
+               "negative autocorr." if dw > 2.5 else "no 1st-order autocorr.")
+        rc.append(f"Durbin-Watson<br>DW={dw:.3f}  ·  {tag}")
+    z.append(rz); texts.append(rt); cdata.append(rc)
+
+    fig = go.Figure(go.Heatmap(
+        z=z, x=ylabels, y=tests, customdata=cdata,
+        colorscale=[
+            [0.0, "rgba(244,115,110,0.55)"],
+            [0.5, "rgba(245,166,35,0.45)"],
+            [1.0, "rgba(45,212,160,0.55)"],
+        ],
+        zmin=0, zmax=1,
+        text=texts, texttemplate="%{text}",
+        textfont=dict(size=9, color=TEXT),
+        hovertemplate="<b>%{x}</b><br>%{customdata}<extra></extra>",
+        showscale=False, xgap=3, ygap=3,
+    ))
+    fig.update_xaxes(tickfont=dict(size=9, color=MUTED, family=FONT_MONO),
+                     showgrid=False, linecolor=BORDER, tickangle=35)
+    fig.update_yaxes(tickfont=dict(size=11, color=MUTED2, family=FONT_MONO),
+                     showgrid=False, linecolor=BORDER)
+    fig.update_layout(**_layout(
+        height=240,
+        margin=dict(t=44, b=120, l=180, r=16),
+        title=dict(text="Regression-Residual Overview  ·  green = homoskedastic / no serial correlation / DW≈2",
+                   font=dict(size=12, color=TEXT), x=0.01),
+    ))
+    return fig
+
+
+def fig_regdiag_variable(col: str) -> go.Figure:
+    """Per-variable panel: BP & BG significance bars + a Durbin-Watson gauge."""
+    d   = REGDIAG_RES[col]
+    fig = make_subplots(
+        rows=1, cols=2, column_widths=[0.52, 0.48], horizontal_spacing=0.16,
+        specs=[[{"type": "xy"}, {"type": "indicator"}]],
+        subplot_titles=["Test significance  ·  −log₁₀(p)", "Durbin-Watson statistic"],
+    )
+
+    # ── (1,1) BP / BG significance bars ──
+    names  = ["Breusch-Pagan<br>(heteroskedasticity)", "Breusch-Godfrey<br>(serial correlation)"]
+    ps     = [d["bp_p"], d["bg_p"]]
+    oks    = [d["bp_ok"], d["bg_ok"]]
+    stats_ = [d["bp_stat"], d["bg_stat"]]
+    yvals  = [-math.log10(max(p, 1e-15)) if not math.isnan(p) else 0 for p in ps]
+    colors = [GREEN if o else RED for o in oks]
+    hover  = [
+        f"<b>{nm.replace('<br>', ' ')}</b><br>LM stat: {sf(st)}<br>p-value: {pf(p)}<br>"
+        f"{'No violation ✔' if o else 'Violation ✘'}<extra></extra>"
+        for nm, st, p, o in zip(names, stats_, ps, oks)
+    ]
+    fig.add_trace(go.Bar(
+        x=names, y=yvals, marker_color=colors, marker_line=dict(color=BORDER, width=1),
+        text=[f"p={pf(p)}" for p in ps], textposition="outside",
+        textfont=dict(size=11, color=MUTED2, family=FONT_MONO),
+        hovertemplate=hover, showlegend=False,
+    ), row=1, col=1)
+    fig.add_hline(y=-math.log10(0.05), line=dict(color=AMBER, width=1.5, dash="dot"),
+                  annotation_text="  α = 0.05", annotation_font=dict(color=AMBER, size=10),
+                  row=1, col=1)
+
+    # ── (1,2) Durbin-Watson gauge (0–4, ideal ≈ 2) ──
+    dw = d["dw_stat"]
+    fig.add_trace(go.Indicator(
+        mode="gauge+number",
+        value=dw,
+        number=dict(font=dict(size=26, color=TEXT, family=FONT_MONO), valueformat=".3f"),
+        gauge=dict(
+            axis=dict(range=[0, 4], tickwidth=1, tickcolor=MUTED, dtick=1,
+                      tickfont=dict(size=10, color=MUTED, family=FONT_MONO)),
+            bar=dict(color="rgba(0,0,0,0)"),          # hide default bar; use threshold marker
+            bgcolor=CARD, borderwidth=1, bordercolor=BORDER,
+            steps=[
+                dict(range=[0, 1.5], color="rgba(244,115,110,0.45)"),   # positive autocorr
+                dict(range=[1.5, 2.5], color="rgba(45,212,160,0.40)"),  # no autocorr
+                dict(range=[2.5, 4], color="rgba(245,166,35,0.40)"),    # negative autocorr
+            ],
+            threshold=dict(line=dict(color=ACCENT2, width=4), thickness=0.85, value=dw),
+        ),
+    ), row=1, col=2)
+
+    ax_kw = dict(**_AX, tickfont=dict(size=11, color=MUTED2, family=FONT_MONO))
+    fig.update_xaxes(**ax_kw, row=1, col=1)
+    fig.update_yaxes(**ax_kw, row=1, col=1,
+                     title=dict(text="−log₁₀(p)  ·  higher = stronger violation", standoff=6))
+
+    grp, gc = GROUPS.get(col, ("", MUTED2))
+    fig.update_layout(
+        **_layout(height=340, margin=dict(t=74, b=44, l=66, r=24)),
+        title=dict(
+            text=f"<span style='color:{gc}'>[{grp}]</span>  <b>{LABELS.get(col, col)}</b>"
+                 "  ·  Regression-Residual Diagnostics",
+            font=dict(size=14, color=TEXT), x=0.01,
+        ),
+    )
+    for ann in fig.layout.annotations:
+        ann.font = dict(size=11, color=MUTED2, family=FONT_MONO)
+    return fig
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  DIAGNOSTICS THEORY CONTENT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1132,7 +1571,7 @@ DIAG_THEORY = html.Div([
                 "The data are drawn from a Normal distribution.",
                 "The data are NOT drawn from a Normal distribution.",
                 "A large D (and small p-value) means the data deviate significantly from Normal. "
-                "$p \geq 0.05$ means we cannot reject normality, the data are consistent with Normal.",
+                r"$p \geq 0.05$ means we cannot reject normality, the data are consistent with Normal.",
                 "Useful for any sample size. Less powerful than Shapiro-Wilk for small samples ($n < 50$). ",
                 caveats="The KS test is general-purpose but less sensitive to deviations in the tails "
                         "compared to Anderson-Darling. For the solar dataset, variables with heavy zeros "
@@ -1200,7 +1639,7 @@ DIAG_THEORY = html.Div([
                 "and $m$ is the number of lags tested. "
                 "Under the null, $\\mathcal{Q} \\sim \\chi^2(h)$ where $h = m - p - q$ for ARMA$(p,q)$ residuals."
                 "For significance level $a$, the critical region for rejection of the hypothesis of randomness is:"
-                "$$\mathcal{Q} > {\chi}_{1-a}^2(h)$$",
+                "$$\\mathcal{Q} > {\\chi}_{1-a}^2(h)$$",
                 "No autocorrelation up to lag m (the series behaves like white noise).",
                 "Significant autocorrelation exists (the series, or model residuals, has exploitable structure).",
                 "Reported here at lags 6, 12, and 24. "
@@ -1247,13 +1686,102 @@ DIAG_THEORY = html.Div([
         ], className="theory-row"),
     ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
 
+    # ── Regression-residual diagnostics sub-section ──
+    html.Div("🧮 Regression-Residual Diagnostics: Heteroskedasticity & Serial Correlation",
+             className="theory-title", style={"marginTop": "30px"}),
+    html.P([
+        "Unlike the five tests above (which run on the raw series), the next three are classical ",
+        html.B("regression diagnostics"), dcc.Markdown(r". For each variable we fit a simple model (a constant "
+        r"plus a linear time trend, e.g. $y_t = \alpha + \beta t + \varepsilon_t$, and examine its residuals $\varepsilon_t$. ", mathjax=True),
+    ], className="section-desc", style={"maxWidth": "100%", "marginBottom": "20px"}),
+
+    html.Div([
+        # Row: Breusch-Pagan + Breusch-Godfrey
+        html.Div([
+            _latex_card(
+                "Breusch-Pagan Test", "BP", AMBER,
+                "The Breusch-Pagan test detects heteroskedasticity — a residual variance that is "
+                "not constant but instead depends on the explanatory variables. It regresses the "
+                "squared residuals on the regressors: if those regressors explain significant "
+                "variation in the size of the residuals, the variance is non-constant.",
+                "Test statistic (LM):",
+                r"$$LM = n\,R^2_{aux} \;\sim\; \chi^2(k)$$"
+                "\n\nwhere $R^2_{aux}$ is the $R^2$ from regressing the squared residuals "
+                "$\\hat{e}_t^{\\,2}$ on the $k$ regressors (excluding the constant), and $n$ is the "
+                "sample size. Under $H_0$, $LM \\sim \\chi^2(k)$.",
+                "The residuals are homoskedastic (constant variance).",
+                "The residuals are heteroskedastic (variance depends on the regressors).",
+                "p < 0.05 rejects homoskedasticity — the spread of the residuals changes systematically "
+                "(e.g. grows over the season). Solar variables with large diurnal amplitude swings "
+                "typically show heteroskedastic residuals (red), which matters for the validity of "
+                "OLS standard errors.",
+                "Assumes the variance is a linear function of the regressors and is sensitive to "
+                "non-normality of the residuals.",
+                caveats="If residuals are heavy-tailed, prefer White's test (a more general, "
+                        "distribution-robust alternative). Computed here on the residuals of a "
+                        "constant + linear-trend regression.",
+            ),
+            _latex_card(
+                "Breusch-Godfrey Test", "BG", "#60a5fa",
+                "The Breusch-Godfrey (LM) test checks for serial correlation in regression residuals "
+                "up to a chosen lag p. It is more general than Durbin-Watson: it handles higher-order "
+                "autocorrelation and stays valid even when the regressors include lagged dependent "
+                "variables. It regresses the residuals on the original regressors plus their own p lags.",
+                "Test statistic (LM):",
+                r"$$LM = n\,R^2_{aux} \;\sim\; \chi^2(p)$$"
+                "\n\nfrom the auxiliary regression of $\\hat{e}_t$ on the original regressors and the "
+                "lagged residuals $\\hat{e}_{t-1}, \\dots, \\hat{e}_{t-p}$. Tested here up to $p = 12$.",
+                "No serial correlation in the residuals up to lag p.",
+                "The residuals are serially correlated at one or more lags ≤ p.",
+                "p < 0.05 means the residuals are autocorrelated, so the trend-only model has missed "
+                "dynamic structure. For these meteorological series the diurnal cycle remains in the "
+                "residuals, so BG is overwhelmingly significant (red) — pointing toward an AR / seasonal "
+                "specification.",
+                "More powerful and general than Durbin-Watson, but the chosen lag p matters.",
+                caveats="With strong daily seasonality, a small p can miss the 24-hour cycle — set "
+                        "p ≥ 24 to capture it. Asymptotic χ² approximation; reliable for large n.",
+            ),
+        ], className="theory-row"),
+        # Row: Durbin-Watson + spacer
+        html.Div([
+            _latex_card(
+                "Durbin-Watson Test", "DW", GREEN,
+                "The Durbin-Watson statistic measures first-order (lag-1) serial correlation of "
+                "regression residuals. It ranges from 0 to 4: a value near 2 indicates no "
+                "autocorrelation, below 2 indicates positive autocorrelation (consecutive residuals "
+                "move together), and above 2 indicates negative autocorrelation.",
+                "Test statistic:",
+                r"$$DW = \frac{\sum_{t=2}^{n}\left(\hat{e}_t - \hat{e}_{t-1}\right)^2}"
+                r"{\sum_{t=1}^{n}\hat{e}_t^{\,2}} \;\approx\; 2\left(1 - \hat{\rho}_1\right)$$"
+                "\n\nwhere $\\hat{\\rho}_1$ is the lag-1 residual autocorrelation. The approximation "
+                "shows the mapping: $\\hat{\\rho}_1 = 0 \\Rightarrow DW \\approx 2$, "
+                "$\\hat{\\rho}_1 = 1 \\Rightarrow DW \\approx 0$.",
+                "No first-order serial correlation (ρ₁ = 0, DW ≈ 2).",
+                "First-order serial correlation is present (ρ₁ ≠ 0).",
+                "DW far below 2 (toward 0) signals strong positive autocorrelation; toward 4 signals "
+                "negative. For the solar series the trend-regression residuals carry the diurnal cycle, "
+                "so DW sits near 0. Exact decision bounds depend on n and k; for large n the "
+                "no-correlation band is tight around 2 (we flag 1.5 ≤ DW ≤ 2.5 as clear).",
+                "Detects only lag-1 autocorrelation and is invalid when regressors include lagged "
+                "dependent variables.",
+                caveats="For higher-order or seasonal autocorrelation, or models with lagged "
+                        "regressors, use Breusch-Godfrey instead. There is no exact p-value — the "
+                        "classical d_L / d_U bounds are tabulated.",
+            ),
+            # Empty spacer card to maintain grid symmetry
+            html.Div(style={"width": "50%"}),
+        ], className="theory-row"),
+    ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
+
     html.Div([
         html.B("📋 Recommended workflow: ", style={"color": GREEN}),
         "(1) Check normality with all three tests (KS, SW, JB) — agreement across tests gives confidence. "
         "(2) Inspect the Q-Q plot visually — a few outliers can dominate the KS/SW statistics. "
         "(3) Use Ljung-Box at lag 24 to confirm whether the diurnal cycle has been captured by your model. "
         "(4) Use the HQC-optimal lag as the starting point for AR/ARIMA order selection — "
-        "then refine with AIC/BIC on the differenced series.",
+        "then refine with AIC/BIC on the differenced series. "
+        "(5) After fitting a model, re-run Breusch-Godfrey / Durbin-Watson on its residuals to confirm "
+        "the serial correlation is gone, and Breusch-Pagan to check the variance is stable.",
     ], className="tip-box"),
 
 ], className="theory-section")
@@ -1270,14 +1798,17 @@ STATION_THEORY = html.Div([
                  "which invalidates most classical forecasting models.",
                  "The test augments the basic Dickey-Fuller regression with lagged differences of the series to absorb any "
                  "serial correlation in the error term. The lag count is chosen automatically by AIC.",
-                 dcc.Markdown(r"Model: $\Delta Y_t = \mu  + \delta y_{t-1} + \sum_{i=1}^{p}\beta_i \Delta Y_{t-1} + \varepsilon_t$", mathjax=True)],
-                dcc.Markdown("""The intuition behind the test is that if the series is characterised by a unit root process, 
+                 dcc.Markdown(r"Model: $\Delta Y_t = \mu  + \delta y_{t-1} + \sum_{i=1}^{p}\beta_i \Delta Y_{t-1} + \varepsilon_t$", mathjax=True),
+                 html.Div([
+                     dcc.Markdown(r"""The intuition behind the test is that if the series is characterised by a unit root process, 
                              then the lagged level of the series ($y_{t-1}$) will provide no relevant information in predicting the change in $y_t$ 
                              besides the one obtained in the lagged changes ($\Delta y_{t-k}$). In this case, the $\delta=0$ and null hypothesis is not rejected.
                              In contrast, when the process has no unit root, it is stationary and hence exhibits reversion to the mean - so the lagged level will provide
                              relevant information in predicting the change of the series and the null hypothesis of a unit root will be rejected.""", mathjax=True),
-                dcc.Markdown("$\delta = 0$ → unit root present (non-stationary)", mathjax=True),
-                dcc.Markdown("$\delta \\neq 0$ → series is stationary", mathjax=True)),
+                 ], className="warn-box", style={"marginTop": "10px"}),
+                ],None,
+                dcc.Markdown(r"$\delta = 0$ → unit root present (non-stationary)", mathjax=True),
+                dcc.Markdown(r"$\delta \neq 0$ → series is stationary", mathjax=True)),
             theory_card("KPSS Test", "KPSS", GREEN,
                 ["The KPSS test takes the opposite stance from ADF: its null hypothesis is that the series IS stationary. "
                  "This makes it a powerful complement (if ADF rejects its null AND KPSS fails to "
@@ -1291,36 +1822,79 @@ STATION_THEORY = html.Div([
                  " trend-stationary processes are mean-reverting (i.e. transitory, the time series will converge again"
                  " towards the growing mean, which was not affected by the shock) while unit-root processes have"
                  " a permanent impact on the mean (i.e. no convergence over time).",
-                 dcc.Markdown(r"Model: $Y_t = \xi_t + r_t + \varepsilon_t$, where $r_t = r_{t-1} + u_t$", mathjax=True)],
-                "KPSS has lower power as a unit-root test than ADF or PP. It was designed to test stationarity, "
+                 dcc.Markdown(r"Model: $Y_t = \xi_t + r_t + \varepsilon_t$, where $r_t = r_{t-1} + u_t$", mathjax=True),
+                 html.Div([
+                     dcc.Markdown(r"KPSS has lower power as a unit-root test than ADF or PP. It was designed to test stationarity, "
                  "not the presence of a unit root. Schmidt & Shin (1992) caution against using it as a primary unit-root test — "
                  "(use it alongside ADF and PP for a consistent picture). Keep in mind that KPSS is a test of trend-stationarity, not just stationarity." 
-                 "and the test statistic is a Lagrange multiplier based on the partial sum of residuals from the regression of $Y_t$ on a deterministic trend. ",
+                 "and the test statistic is a Lagrange multiplier based on the partial sum of residuals from the regression of $Y_t$ on a deterministic trend. ", mathjax=True),
+                 ], className="warn-box", style={"marginTop": "10px"}),
+                ],
+                None,
                 dcc.Markdown(r"$\sigma^2_u = 0$ → series is trend-stationary", mathjax=True),
                 dcc.Markdown(r"$\sigma^2_u \ge 0$ → unit root / non-stationary", mathjax=True)),
         ], className="theory-row"),
         html.Div([
             theory_card("Phillips-Perron", "PP", AMBER,
-                ["The PP test is a non-parametric extension of the Dickey-Fuller test. Rather than adding lagged differences "
-                 "as regressors (as ADF does), it applies a direct correction to the test statistic using the Newey-West "
-                 "long-run variance estimator. This makes it robust to serial correlation and heteroskedasticity in the errors "
-                 "without requiring a correct lag specification.",
+                ["The Phillips-Perron (PP) test is a non-parametric statistical diagnostic used to detect a unit root, "
+                "namely the stationarity behavior. While the classic Augmented Dickey-Fuller (ADF) test handles underlying temporal"
+                " dependencies and heteroscedasticity parametrically by adding explicit lagged difference terms to the regression "
+                "equation, the PP test leaves the baseline regression simple and instead applies a Newey-West robust covariance correction"
+                " directly to the test statistics. ",
                  "PP is generally preferred over ADF when the error structure is unknown, but Davidson & MacKinnon (2004) "
                  "found it can underperform ADF in finite samples. Best used together with ADF.",
-                 dcc.Markdown(r"Model: $\Delta Y_t = \alpha + \beta t + \gamma Y_{t-1} + \varepsilon_t$ (non-parametric correction applied to statistic)", mathjax=True)],
-                None,
-                "γ = 0 → unit root present",
-                "γ < 0 → series is stationary"),
+                 dcc.Markdown(r"Model: $\Delta Y_t = \alpha + \beta t + \gamma Y_{t-1} + \varepsilon_t$ (non-parametric correction applied to statistic)", mathjax=True),
+                  html.Div([
+                     html.Span("⚠ Caveats: ", style={"fontWeight": "700", "color": AMBER}),
+                     "Although the PP test is robust to certain forms of autocorrelation and heteroskedasticity, it" \
+                     " can still suffer from low power in finite samples, particularly when the series is highly persistent."
+                     " The test is also sensitive to structural breaks, where a level or trend shift may cause a stationary"
+                     " process to appear non-stationary. Furthermore, the choice of bandwidth used in estimating the long-run"
+                     " variance can affect the results. Like all unit-root tests, the PP test may struggle to distinguish between"
+                     " a highly persistent stationary process and a true unit-root process, especially when sample sizes are small.",
+                 ], className="warn-box", style={"marginTop": "10px"}),
+                ],
+                dcc.Markdown(
+                    r"Young practitioners should view the Phillips-Perron test as a robust alternative " \
+                    r"to the ADF test when residual autocorrelation or heteroskedasticity is suspected." \
+                    r" The interpretation is straightforward: if the p-value is below the chosen significance" \
+                    r" level, reject $ H_0:\gamma = 0$ and conclude that the series is stationary. Because no " \
+                    r"single unit-root test is definitive, it is common practice to use the PP test alongside " \
+                    r"the ADF and KPSS tests. When all three tests point to the same conclusion, confidence in " \
+                    r"the stationarity assessment is substantially increased. In applied forecasting and " \
+                    r"econometrics, stationarity diagnostics should always precede VAR, VECM, ARIMA, and " \
+                    r"cointegration analyses.", mathjax=True),
+                dcc.Markdown(r"$\gamma = 0$ → unit root present", mathjax=True),
+                dcc.Markdown(r"$\gamma < 0$ → series is stationary", mathjax=True)),
             theory_card("Zivot-Andrews", "ZA", "#a78bfa",
-                ["The standard ADF and PP tests assume no structural breaks in the series. For meteorological data, "
-                 "this assumption often fails — e.g. a sensor recalibration, a regime shift in cloud patterns, or a "
-                 "seasonal discontinuity. The ZA test allows for one endogenously determined structural break.",
+                ["The Zivot-Andrews (ZA) test is an advanced unit root test designed to solve"
+                " a major flaw in traditional tests like the Augmented Dickey-Fuller (ADF) and Phillips-Perron (PP) tests:"
+                " structural breaks. Standard unit root tests have notoriously low statistical power when applied to data"
+                " that contains a structural break (a sudden, permanent shift in the mean or trend of the data)."
+                " If a series is perfectly stationary but contains a sharp structural break, tests like the PP"
+                " or ADF will get confused, mistake the break for a unit root, and incorrectly conclude that"
+                " the series is non-stationary. The ZA test fixes this by endogenously searching for, identifying, and accounting for"
+                " the single most significant structural break in the data while testing for stationarity.",
                  "The break point is chosen by minimising the ADF statistic across all possible break dates, making the "
                  "test conservative. If ZA rejects but ADF does not, a structural break is likely masking stationarity.",
-                 dcc.Markdown(r"Model: $\Delta Y_t = \alpha + \beta t + \gamma Y_{t-1} + \delta DU_t + \theta DT_t + \sum c_i \Delta Y_{t-i} + \varepsilon_t$", mathjax=True)],
-                None,
-                "Unit root present (no structural break)",
-                "Trend-stationary with one endogenous break"),
+                 html.Div(["We assume the following models incorporating a potential break at time $TB$:",
+                            dcc.Markdown(r"Model A (Change in Intercept): $Y_t = \mu + \theta DU_t(\lambda) + \beta t + \alpha Y_{t-1}  + \sum c_i \Delta Y_{t-i} + \varepsilon_t$", mathjax=True),
+                            dcc.Markdown(r"Model B (Change in Trend): $Y_t = \mu + \gamma DT_t(\lambda) + \beta t + \alpha Y_{t-1}  + \sum c_i \Delta Y_{t-i} + \varepsilon_t$ ", mathjax=True),
+                            dcc.Markdown(r"Model C (Change in Both): $Y_t = \mu + \theta DU_t(\lambda) + \gamma DT_t(\lambda) + \beta t + \alpha Y_{t-1}  + \sum c_i \Delta Y_{t-i} + \varepsilon_t$", mathjax=True),
+                            dcc.Markdown(r"""where $\Delta y_{t-1}$ terms control for serial correlation in the error term, identical to an ADF test. The optimal lag length \(k\) is usually chosen using information criteria like AIC or BIC.
+                              $\lambda=\frac{TB}{T}$ This represents the ratio of the break date ($TB$) to the total sample size ($T$).
+                              $DU_t(\lambda) = 1$ if $t > TB$ else 0 (captures a shift in the mean level after the break),
+                              $DT_t(\lambda) = t - TB$ if $t > TB$ else 0 (captures a change in the slope of the trend after the break).
+                              $t_\alpha(\lambda) = \frac{\hat{\alpha}-1}{\sigma_{\hat{\alpha}}}$ (t-statistic for the unit root hypothesis).
+                              The final Zivot-Andrews test statistic ($t_{ZA} = inf_{\lambda \in \Lambda} t_\alpha(\lambda)$) is defined mathematically as the minimum (most negative) $t$-statistic found across the entire grid search.
+                            """, mathjax=True) ], className="warn-box", style={"marginTop": "10px"})
+                 ],
+                dcc.Markdown(r"""The ZA test evaluates the null hypothesis of a unit root against the alternative of stationarity with a structural break.
+                              The test statistic is the minimum t-statistic for the unit root coefficient across all possible break points, and the critical values are derived from simulations that account for the presence of a break.
+                                If the ZA test rejects the null while ADF does not, it suggests that the series is actually stationary but contains a structural break that confounds traditional unit root tests.
+                             """, mathjax=True),
+                dcc.Markdown(r"The series contains a unit root (is non-stationary) and has no structural break ($\alpha=1$).", mathjax=True),
+                "The series is trend-stationary with a single structural break occurring at an unknown point in time."),
         ], className="theory-row"),
     ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
     html.Div([
@@ -1338,8 +1912,8 @@ COINT_THEORY = html.Div([
         html.Div([
             theory_card("Engle-Granger Two-Step", "EG", ACCENT2,
                 ["Cointegration tests ask whether two non-stationary (I(1)) series share a long-run equilibrium. "
-                 "Even though each series wanders individually, a linear combination of them may be stationary — "
-                 "meaning deviations from their shared trend are temporary and mean-reverting.",
+                 "Even though each series wanders individually, a linear combination of them may be stationary "
+                 "(meaning deviations from their shared trend are temporary and mean-reverting).",
                  "The Engle-Granger procedure runs in two steps: first, regress Y on X by OLS to estimate the "
                  "long-run relationship. Second, apply an ADF test to the residuals. If the residuals are stationary, "
                  "the series are cointegrated.",
@@ -1348,42 +1922,87 @@ COINT_THEORY = html.Div([
                 "Residuals have a unit root → no cointegration",
                 "Residuals are stationary → series are cointegrated"),
             theory_card("What Cointegration Means", "CI(1,1)", GREEN,
-                ["Think of two cointegrated series as elastic bands stretched between two posts — they can diverge "
-                 "in the short run but are always pulled back toward each other. This long-run equilibrium is the "
+                ["Think of two cointegrated series as elastic bands stretched between two posts (they can diverge "
+                 "in the short run but are always pulled back toward each other). This long-run equilibrium is the "
                  "cointegrating relationship.",
                  "For the solar dataset: shortwave radiation and temperature are both non-stationary over a year, "
-                 "but they track each other closely — when one rises (summer), so does the other. "
+                 "but they track each other closely (when one rises so does the other). "
                  "A cointegrating model captures this shared seasonal structure without differencing away the trend.",
                  dcc.Markdown(r"$X_t, Y_t$ are CI(1,1) if $\exists\,\beta$ such that $Y_t - \beta X_t \sim I(0)$", mathjax=True)],
                 None,
                 "No linear combination is stationary",
-                "∃ β such that Yₜ − βXₜ is I(0)"),
+                 dcc.Markdown(r"$\exists\,\beta$ such that $Y_t - \beta X_t \sim I(0)$", mathjax=True)),
         ], className="theory-row"),
         html.Div([
-            theory_card("Error Correction Model", "ECM", AMBER,
-                ["Once cointegration is confirmed, an Error Correction Model (ECM) captures both short-run dynamics "
-                 "and the long-run equilibrium in one framework. The error correction term ($Y_{t-1} - \\beta X_{t-1}$) measures "
-                 "how far the system deviated from equilibrium in the previous period.",
-                 "The coefficient $\\gamma$ on this term must be negative for the system to correct (a value of $\\gamma = -0.2$) "
-                 "means 20% of any deviation is corrected each hour. For solar datasets, this speed of adjustment "
-                 "reflects how quickly temperature responds to a radiation anomaly.",
-                 dcc.Markdown(r"$\Delta Y_t = \alpha + \gamma(Y_{t-1} - \beta X_{t-1}) + \sum_i \delta_i \Delta X_{t-i} + \varepsilon_t$", mathjax=True)],
-                None,
-                "γ = 0 → no error correction (series drift apart)",
-                "γ < 0 → system corrects toward long-run equilibrium"),
-            theory_card("Johansen Test (note)", "JOH", "#a78bfa",
-                ["The Engle-Granger test is limited to pairs of variables. When testing cointegration across three or "
-                 "more series simultaneously, the Johansen procedure is the standard tool. It uses a Vector "
-                 "Autoregression (VAR) framework and tests the rank of the long-run coefficient matrix Π.",
-                 "The rank equals the number of cointegrating vectors. Rank 0 means no cointegration; rank r means "
-                 "r independent long-run relationships exist. For the full 20-variable solar dataset, Johansen "
-                 "would reveal the complete cointegration structure in a single test.",
-                 dcc.Markdown(r"VAR: $\Delta X_t = \mu + \Pi X_{t-1} + \sum_i \Gamma_i \Delta X_{t-i} + \varepsilon_t$, $\text{rank}(\Pi) = r$", mathjax=True)],
-                None,
-                "rank(Π) = 0 → no cointegration",
-                "rank(Π) = r ≥ 1 → r cointegrating vectors"),
-        ], className="theory-row"),
+           theory_card("Johansen Test (note)", "JOH", "#a78bfa",
+                [dcc.Markdown(r"The Johansen Test is a multivariate cointegration procedure used to determine " \
+                r"whether a set of non-stationary $I(1)$ time series share one or more long-run " \
+                "equilibrium relationships. It is based on a Vector Error Correction Model (VECM)," \
+                r" where the key matrix Π captures long-run dynamics. The rank of $\Pi(r)$ determines " \
+                r"the number of cointegrating vectors: $r=0$ implies no cointegration, " \
+                "while 0<r<k indicates one or more stationary linear combinations of the variables." \
+                " The test uses the Trace and Maximum Eigenvalue statistics to estimate the" \
+                r" cointegration rank from the eigenvalues of $\Pi$.", mathjax=True),
+                 dcc.Markdown(r"VAR: $\Delta X_t = \mu + \Pi X_{t-1} + \sum_i \Gamma_i \Delta X_{t-i} + \varepsilon_t$, $\text{rank}(\Pi) = r$", mathjax=True),
+                 html.Div([
+                     html.Span("⚠ Caveats: ", style={"fontWeight": "700", "color": AMBER}),
+                     dcc.Markdown("The Johansen Test assumes that the variables are generally integrated of the same order,"
+                     " typically $I(1)$, and results can be highly sensitive to lag selection,"
+                     " deterministic terms (intercepts and trends), and structural breaks in the data."
+                     " Small samples may produce unreliable inference because the test relies on asymptotic"
+                     " theory. Furthermore, finding cointegration indicates a long-run equilibrium relationship"
+                     " but does not imply causality or economic significance by itself.", mathjax=True) ,
+                 ], className="warn-box", style={"marginTop": "10px"})
+                 ],
+                "A useful intuition is that cointegrated variables may drift individually over time, " \
+                "but they remain linked by a stable long-run relationship. The Johansen framework is often" \
+                " preferred over the Engle-Granger method because it can identify multiple cointegrating " \
+                "relationships simultaneously and treats all variables as potentially endogenous." \
+                " In practice, researchers should first verify stationarity properties, carefully select the VAR lag structure, "
+                "and interpret the resulting cointegrating vectors within the context of economic or" \
+                " domain-specific theory.",
+                dcc.Markdown(r"$\text{rank}(\Pi) = 0 \rightarrow$ no cointegration", mathjax=True),
+                dcc.Markdown(r"$\text{rank}(\Pi) = r \geq 1 \rightarrow$ r cointegrating vectors", mathjax=True)),
+            theory_card("Phillips-Ouliaris Test", "PO", RED,
+                [dcc.Markdown("The Phillips-Ouliaris (PO) test is a residual-based cointegration test, like Engle-Granger, "
+                 "but replaces the parametric ADF step with a non-parametric Phillips-Perron correction on the OLS residuals. "
+                 "This makes PO robust to serial correlation and conditional heteroscedasticity in the error term "
+                 "without requiring the analyst to specify a lag length.",
+                 "The procedure is: (1) Regress Y on X by OLS to obtain the cointegrating residuals. "
+                 r"(2) Apply the PP $Z(t)$ or $Z(\alpha)$ statistic to those residuals. "
+                 "A significantly negative statistic rejects the null of no cointegration.",mathjax=True),
+                 dcc.Markdown(
+                    r"Step 1: $Y_t = \alpha + \beta X_t + \hat{\varepsilon}_t$   "
+                    r"Step 2: PP$(\hat{\varepsilon}_t)$: $Z(\tau) = \frac{\hat{\sigma}^2 - \hat{\lambda}^2}{2\hat{\lambda}^2}\cdot\frac{\hat{\sigma}_\tau^2}{\hat{s}_\ell^2} \cdot \tau_\rho - \frac{T(\hat{\lambda}^2 - \hat{\sigma}^2)}{2\hat{\lambda}\hat{s}_\ell}$",
+                    mathjax=True),
+                 dcc.Markdown(
+                    r"where $\hat{\sigma}^2 = T^{-1}\sum_t \hat{\varepsilon}_t^2$, "
+                    r"$\hat{s}_\ell^2$ is the Newey-West long-run variance estimator with bandwidth $\ell$, "
+                    r"and $\hat{\lambda}^2 = \hat{s}_\ell^2$ under $H_0$.",
+                    mathjax=True),
+                 html.Div([
+                     html.Span("⚠ Caveats: ", style={"fontWeight": "700", "color": AMBER}),
+                     "PO p-values here are approximated via the MacKinnon (2010) response surface "
+                     "(same as EG), so they share the same asymptotic framework. "
+                     "For very short series (n < 100), use bootstrap critical values instead.",
+                 ], className="warn-box", style={"marginTop": "10px"}),
+                ],
+                "PO is preferred over EG when the error term is heteroscedastic or has unknown autocorrelation structure. "
+                "Phillips & Ouliaris (1990) showed that, unlike ADF-based tests applied to residuals, their Z(t) statistic "
+                "has a distribution that depends only on the number of regressors (not the order of integration), "
+                "making critical values tabulation straightforward. "
+                "In practice, EG and PO give similar conclusions for large samples; PO is more reliable for shorter series.",
+                dcc.Markdown(r"$H_0$: Residuals have a unit root → series are NOT cointegrated", mathjax=True),
+                dcc.Markdown(r"$H_1$: Residuals are stationary → series ARE cointegrated", mathjax=True)),
+        ], className="theory-row"),            
     ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
+    html.Div([
+        html.B("⚠ Test comparison: ", style={"color": AMBER}),
+        "EG is simple but sensitive to which variable is regressed on which (asymmetry). "
+        "PO corrects for heteroscedastic errors without lag selection. "
+        "Johansen detects multiple cointegrating vectors and is unaffected by variable ordering. "
+        "Use all three: agreement across tests gives high-confidence cointegration evidence."
+    ], className="warn-box"),
 ], className="theory-section")
 
 
@@ -1392,47 +2011,147 @@ GRANGER_THEORY = html.Div([
     html.Div([
         html.Div([
             theory_card("Granger Causality", "GC", ACCENT2,
-                ["Granger causality is not causality in the philosophical sense (it is predictive causality). "
-                 "We say X Granger-causes Y if knowing past values of X improves our forecast of Y, "
-                 "beyond what past values of Y alone could tell us.",
-                 "The test fits two VAR models: a restricted model (Y predicted only by its own past) and an "
-                 "unrestricted model (Y predicted by both its past and X's past). An F-test compares the residual "
-                 "sum of squares. A significant F-statistic means X adds predictive power.",
-                 dcc.Markdown(r"Unrestricted: $Y_t = \sum_i a_i Y_{t-i} + \sum_i b_i X_{t-i} + \varepsilon_t$", mathjax=True)],
-                None,
-                "b₁ = b₂ = … = bₖ = 0 (X adds no predictive power for Y)",
-                "At least one bᵢ ≠ 0 (X Granger-causes Y at some lag)"),
+                [dcc.Markdown(r"The Granger Causality Test examines whether past values of one time series help predict another"
+                               r" time series beyond the information already contained in its own past. For two variables $X_t$ "
+                               r"and $Y_t$, the test compares a restricted model containing only lagged values of $Y_t$ with"
+                               r" an unrestricted model that also includes lagged values of $X_t$. The null hypothesis is that"
+                               r" the coefficients on the lagged $X_t$ terms are jointly zero."
+                               r"An F-test (or Wald test) is then used to determine ",
+                               r"whether including lagged $X_t$ significantly improves the prediction of $Y_t$. If the null is"
+                               r" rejected, $X$ is said to Granger-cause $Y$. In cointegrated systems, Granger causality is typically "
+                               r"examined within a VECM framework, where both short-run dynamics and long-run equilibrium "
+                               r"adjustments are considered.", mathjax=True),
+                 dcc.Markdown(r"Unrestricted: $Y_t = \sum_i a_i Y_{t-i} + \sum_i b_i X_{t-i} + \varepsilon_t$", mathjax=True),
+                 html.Div([
+                     html.Span("⚠ Caveats: ", style={"fontWeight": "700", "color": AMBER}),
+                     "Granger causality does not imply true causation; it only indicates predictive content. "
+                     "Results can be highly sensitive to lag selection, omitted variables, structural breaks, "
+                     "and model misspecification. The test also assumes stationarity (or a properly specified VECM "
+                     "if variables are cointegrated). Two variables may exhibit Granger causality simply because both"
+                     " are driven by an unobserved third factor. Therefore, statistical significance should always "
+                     "be interpreted alongside economic or domain-specific reasoning.",
+                 ], className="warn-box", style={"marginTop": "10px"})
+                 ],
+                dcc.Markdown(r" A useful interpretation is: if knowing yesterday's values of X improves forecasts of Y, then X" \
+                r" Granger-causes Y. Possible outcomes include unidirectional causality ($X \rightarrow Y$), " \
+                r"reverse causality ($Y \rightarrow X$), bidirectional causality (feedback), or no causality. " \
+                r"In cointegration analysis, finding cointegration often implies that at least one direction of Granger" \
+                r" causality must exist, making the Granger test a natural follow-up after the Johansen test." \
+                r" Always interpret the results as evidence of predictive relationships, not proof of cause-and-effect.", mathjax=True),
+                dcc.Markdown(r" $b_1 = b_2 = \dots = b_k = 0$ (X adds no predictive power for Y)", mathjax=True),
+                dcc.Markdown(r" $\exists i \in \mathbb{N}_{\leq k}: b_i \neq 0$ (X Granger-causes Y at some lag)", mathjax=True)),
             theory_card("Key Caveats", "!", RED,
-                ["Granger causality has three well-known failure modes that every analyst must understand:",
-                 "① Confounding: a hidden third variable Z may drive both X and Y, creating the illusion that X causes Y. "
-                 "Example: zenith angle drives both shortwave radiation and temperature (each appears to Granger-cause the other).",
-                 "② Instantaneous effects: GC only captures lagged relationships. If X and Y move together within the "
-                 "same hour (common in coupled physical systems), GC will miss the relationship entirely.",
-                 "③ Non-linearity: standard GC assumes a linear VAR. Chaotic or threshold systems require nonlinear "
-                 "alternatives like Convergent Cross Mapping (CCM) or kernel-based GC."]),
+                [dcc.Markdown(r"The Granger Causality Test evaluates whether past values of a variable $X_t$ improve the"
+                    r" prediction of another variable $Y_t$ beyond the information contained in $Y_t$'s own"
+                    r" history. This is achieved by comparing a restricted autoregressive model with an unrestricted"
+                    r" model that includes lagged values of $X_t$. The null hypothesis is that all coefficients"
+                    r" associated with the lagged $X_t$ terms are jointly zero. If the null is rejected using an "
+                    r"F-test or Wald test, then $X_t$ is said to Granger-cause $Y_t$. In practice, the workflow "
+                    r"consists of testing for stationarity (or cointegration), selecting an appropriate lag order,"
+                    r" estimating a VAR or VECM, and testing the significance of lagged predictors.", mathjax=True),
+                    html.Div([
+                     html.Span("⚠ Caveats: ", style={"fontWeight": "700", "color": AMBER}),
+                     dcc.Markdown(r"Granger causality has three important limitations. " \
+                                  r"First, confounding occurs when an unobserved variable $Z_t$ influences both" \
+                                  r" $X_t$ and $Y_t$, creating a spurious causal relationship even though no " \
+                                  r"direct mechanism exists between them." \
+                                  r" Second, instantaneous effects are not captured because the method only evaluates " \
+                                  r"lagged dependencies; if $Y_t = \alpha X_t + \varepsilon_t$ within the same time period, " \
+                                  r"the test may fail to detect the relationship entirely. " \
+                                  r"Third, nonlinearity can invalidate conclusions because the standard VAR framework assumes " \
+                                  r"linear dynamics. Systems with thresholds, regime changes, or chaotic behavior may require " \
+                                  r"nonlinear alternatives such as Convergent Cross Mapping (CCM), Transfer Entropy, or " \
+                                  r"kernel-based Granger causality methods.", mathjax=True)
+                 ], className="warn-box", style={"marginTop": "10px"}),
+                 html.Code(r"Young practitioners should remember that Granger causality measures predictive causality,"
+                 " not true cause-and-effect. A significant result only indicates that past observations of one"
+                 " variable contain useful forecasting information about another variable. Therefore, every finding should"
+                 " be evaluated against domain knowledge, potential confounders, data frequency, and model assumptions."
+                 " As a rule of thumb, Granger-causality results are most credible when they are robust across lag selections,"
+                 " supported by theory, and consistent with the known dynamics of the underlying system.", className="math")
+                 ]),
         ], className="theory-row"),
         html.Div([
             theory_card("VAR Block Exogeneity", "VAR-GC", AMBER,
-                ["When multiple variables are modelled jointly in a Vector Autoregression, the pairwise GC framework "
-                 "generalises to block exogeneity tests. A Wald test evaluates whether the entire coefficient block "
-                 "for variable X (across all lags) is jointly zero in the equation for Y.",
-                 "This is more powerful than pairwise GC because the VAR accounts for the joint dynamics of all "
-                 "included variables simultaneously, reducing the risk of spurious causality from omitted variables.",
-                 dcc.Markdown(r"VAR: $X_t = \sum_k A^{(k)} X_{t-k} + \varepsilon_t$ (Wald test on block $A^{(k)}_{ij}$)", mathjax=True)],
-                None,
-                "All elements of Aₖ[i,j] = 0 across all lags (X does not Granger-cause Y in the system)",
-                "At least one Aₖ[i,j] ≠ 0 (X Granger-causes Y within the VAR)"),
+                ["The **VAR Block Exogeneity Test examines whether a subset of variables in a Vector Autoregression (VAR)"
+                " contributes to the prediction of another variable or group of variables. Consider a VAR(p) model:",
+                 dcc.Markdown(
+                     r"$X_t = \sum_k A^{(k)} X_{t-k} + \varepsilon_t$", mathjax=True),
+                dcc.Markdown(r"where $X_t$ contains multiple endogenous variables. To test whether a block of variables $\tilde{X}_t$"
+                " influences another variable $Y_t$, the null hypothesis is that all lagged coefficients associated"
+                " with $\tilde{X}_t$ are jointly zero (Wald test on block $A^{(k)}_{ij}$)", mathjax=True),
+                dcc.Markdown(r"A Wald or (\chi^2) test is then used to determine whether " \
+                             r"excluding the entire block significantly reduces the model's explanatory power." \
+                             r" If the null is rejected, the block of variables is said to be not exogenous"
+                             r" and contains useful predictive information for the target variable(s).", mathjax=True),
+                html.Div([
+                    html.Span("⚠ Caveats: ", style={"fontWeight": "700", "color": AMBER}),
+                     "The VAR Block Exogeneity Test is fundamentally a test of "
+                    "predictive relevance, not structural causation. Results can be highly sensitive" \
+                    " to lag selection, omitted variables, model specification, and sample size." \
+                    " If important variables are excluded from the VAR, a block may appear exogenous"
+                    " or non-exogenous simply because the true driver is missing. In addition, strong" \
+                    " contemporaneous relationships are not directly captured because the test focuses on " \
+                    "lagged effects. For cointegrated variables, a VECM-based block exogeneity test is " \
+                    "generally preferred, as ignoring long-run equilibrium relationships may lead to" \
+                    " misleading conclusions."
+                 ], className="warn-box", style={"marginTop": "10px"}),
+                ],
+                "Young practitioners can think of the VAR Block Exogeneity Test as a multivariate extension" \
+                " of Granger causality. While a standard Granger test asks whether one variable helps" \
+                " predict another, block exogeneity asks whether an entire group of variables jointly" \
+                " improves forecasting performance. A failure to reject the" \
+                " null suggests that the block adds little predictive information, whereas rejection indicates" \
+                " that the block should remain in the system. The test is particularly useful for model" \
+                " simplification, variable selection, and understanding information flow within large VAR frameworks." \
+                "This is more powerful than pairwise GC because the VAR accounts for the joint dynamics of all "
+                "included variables simultaneously, reducing the risk of spurious causality from omitted variables.",
+                dcc.Markdown(r"All elements of $A_k[i,j] = 0$ across all lags (X does not Granger-cause Y in the system)", mathjax=True),
+                dcc.Markdown(r"At least one $A_k[i,j] \neq 0$ (X Granger-causes Y within the VAR)", mathjax=True)
+            ),
             theory_card("Convergent Cross Mapping", "CCM", GREEN,
-                ["CCM (Sugihara et al., 2012) is a nonlinear causal detection method for dynamical systems. "
-                 "It reconstructs the state space of a system using time-delay embeddings (Takens' theorem) and "
-                 "tests whether the manifold of X can be used to predict the state of Y.",
-                 "Unlike GC, CCM detects causality in weakly coupled chaotic systems where linear methods fail. "
-                 "For the solar dataset, a Lyapunov exponent of λ ≈ 0.072 confirms chaotic dynamics, making CCM "
-                 "the recommended method to validate the Granger causality findings presented here.",
-                 "Recommended full pipeline: CCM validation → VAR on confirmed causal graph → block-bootstrap "
-                 "VAR residuals with block size 24h (to preserve diurnal autocorrelation) → validate with KS test "
-                 "and Lyapunov exponent comparison (target λ ≈ 0.072, Hurst H ≈ 0.19)."]),
-        ], className="theory-row"),
+                [dcc.Markdown(
+                    r"Convergent Cross Mapping (CCM) is a nonlinear causality method designed " \
+                    r"to detect causal relationships in complex dynamical systems. Unlike Granger causality," \
+                    r" which relies on predictability through lagged linear relationships, CCM is based on" \
+                    r" state-space reconstruction from dynamical systems theory. Given two variables $X_t$ and $Y_t$," \
+                    r" Takens' theorem states that the hidden system dynamics can be reconstructed using time-delayed" \
+                    r" embeddings, such as ",mathjax=True),
+                 dcc.Markdown(r"$M_X(t)=\left[X_t, X_{t-\tau}, X_{t-2\tau}, \ldots, X_{t-(E-1)\tau}\right]$,", mathjax=True),
+                 dcc.Markdown(
+                            r"where $E$ is the embedding dimension and $\tau$ is the delay. If $X$ causally influences $Y$," \
+                            r" information about $X$ should be encoded in the reconstructed manifold of $Y$. CCM tests this by using" \
+                            r" nearest neighbors on $M_Y$ to estimate values of $X_t$. The cross-map skill is typically measured by" \
+                            r" the correlation ", mathjax=True),
+                dcc.Markdown(r"$\rho = \text{corr}\left(X_t,\hat{X}_t\right)$. ", mathjax=True),
+                dcc.Markdown(
+                            r"Evidence of causality is obtained when $\rho$ increases and converges as the " \
+                            r"library size grows, indicating that the information about $X$ is recoverable " \
+                            r"from the dynamics of $Y$. ", mathjax=True),
+                html.Div([
+                    html.Span("⚠ Caveats: ", style={"fontWeight": "700", "color": AMBER}),
+                    dcc.Markdown(r"" \
+                        r"CCM assumes that the variables belong to the same underlying dynamical system and that" \
+                        r" sufficient observations are available to reconstruct the system's attractor. The method" \
+                        r" can perform poorly when the sample size is small, noise levels are high, or the system"
+                        r" is weakly coupled. Strong synchronization between variables may also obscure causal" \
+                        r" direction because each variable contains nearly identical information. Furthermore," \
+                        r" selecting inappropriate embedding parameters $(E,\tau)$ can lead to incorrect conclusions." \
+                        r" Although CCM is designed for nonlinear systems, it does not automatically distinguish " \
+                        r"direct causation from indirect pathways involving intermediate variables. ", mathjax=True),
+                 ], className="warn-box", style={"marginTop": "10px"}), 
+                ],
+                dcc.Markdown(
+                    r"Young practitioners should think of CCM as a method that asks: " \
+                    "\"Can I reconstruct the history of $X$ using the geometric structure of $Y$?\"" \
+                    r" If the answer improves as more data are used, then $X$ likely leaves a causal footprint "
+                    r"in $Y$. CCM is particularly valuable in complex systems where relationships are nonlinear and feedback-driven." \
+                    r" Unlike Granger causality, CCM can detect causality even when there is no strong lagged" \
+                    r" predictive signal. A useful rule of thumb is that Granger causality asks whether $X$ helps forecast $Y$," \
+                    r" whereas CCM asks whether the dynamics of $Y$ contain information about $X$ because both evolve" \
+                    r" on the same underlying system attractor.", mathjax=True)
+                ),
+                ], className="theory-row"),
     ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
     html.Div([
         html.B("Pipeline recommendation: ", style={"color": GREEN}),
@@ -1829,16 +2548,18 @@ tab_cointegration = dbc.Tab(
     label="🔗  Cointegration",
     tab_id="tab-cointegration",
     children=html.Div([
-        section_hdr("Cointegration Tests: Engle-Granger"),
+        # ── Engle-Granger ────────────────────────────────────────────────────
+        section_hdr("Engle-Granger Cointegration"),
         html.Div(
             f"Pairwise Engle-Granger cointegration test on {len(COINT_PAIRS)} physically motivated variable pairs. "
             "Cointegrated pairs share a long-run equilibrium: deviations are temporary and mean-reverting.",
             className="section-desc"
         ),
         banner(
-            (len(COINT_RES), "Pairs tested", ACCENT2),
-            (n_co, "Cointegrated", GREEN),
-            (len(COINT_RES) - n_co, "Not cointegrated", RED),
+            (len(COINT_RES), "EG pairs tested", ACCENT2),
+            (n_co, "Cointegrated (EG)", GREEN),
+            (n_joh, "Cointegrated (Johansen)", "#a78bfa"),
+            (n_po, "Cointegrated (PO)", RED),
             ("5%", "Significance level", AMBER),
         ),
         plot_card(
@@ -1849,6 +2570,40 @@ tab_cointegration = dbc.Tab(
             [dcc.Graph(id="coint-pvals", figure=fig_coint_pvals(), config=PLOTLY_CFG)],
             label="p-values  ·  green = cointegrated at 5%"
         ),
+
+        # ── Johansen ─────────────────────────────────────────────────────────
+        section_hdr("Johansen Cointegration"),
+        html.Div(
+            "Multivariate likelihood-ratio test for cointegrating rank. "
+            "Trace statistic tests H₀: rank ≤ r. Amber markers show 5% critical values. "
+            "Rank ≥ 1 indicates at least one cointegrating vector.",
+            className="section-desc"
+        ),
+        plot_card(
+            [dcc.Graph(id="johansen-bars", figure=fig_johansen_bars(), config=PLOTLY_CFG)],
+            label="Trace statistic (H₀: rank=0)  ·  amber marker = 5% critical value"
+        ),
+        plot_card(
+            [dcc.Graph(id="johansen-rank", figure=fig_johansen_rank_heatmap(), config=PLOTLY_CFG)],
+            label="Estimated cointegrating rank per pair"
+        ),
+
+        # ── Phillips-Ouliaris ─────────────────────────────────────────────────
+        section_hdr("Phillips-Ouliaris Cointegration"),
+        html.Div(
+            "Residual-based test using a non-parametric PP correction on OLS residuals. "
+            "Robust to heteroscedastic and autocorrelated errors without manual lag selection.",
+            className="section-desc"
+        ),
+        plot_card(
+            [dcc.Graph(id="po-bar", figure=fig_po_bars(), config=PLOTLY_CFG)],
+            label="PO Z(t) statistic  ·  more negative = stronger cointegration"
+        ),
+        plot_card(
+            [dcc.Graph(id="po-pvals", figure=fig_po_pvals(), config=PLOTLY_CFG)],
+            label="p-values  ·  green = cointegrated at 5%"
+        ),
+
         COINT_THEORY,
     ], style={"maxWidth": "1400px", "margin": "0 auto"}),
 )
@@ -1929,6 +2684,31 @@ tab_diagnostics = dbc.Tab(
         ], className="controls-row", style={"marginTop": "20px"}),
         plot_card([dcc.Graph(id="diag-variable-panel", config=PLOTLY_CFG)]),
 
+        # ── Regression-residual diagnostics ─────────────────────────────
+        section_hdr("Regression-Residual Diagnostics: Heteroskedasticity & Serial Correlation"),
+        html.Div(
+            dcc.Markdown("Three classical regression diagnostics applied to the residuals of a constant + " \
+            r"linear-trend fit ($y_t = \alpha + \beta t + \varepsilon_t$) for every variable: " \
+            "Breusch-Pagan for heteroskedasticity (non-constant variance); " \
+            "Breusch-Godfrey (up to lag 12) and Durbin-Watson (lag 1) for serial correlation. " \
+            "The per-variable panel below follows the variable selected above.", mathjax=True),
+            className="section-desc",
+        ),
+        banner(
+            (n_homosk,    f"Homoskedastic (BP, n={len(AVAILABLE)})", AMBER),
+            (n_nocorr_bg, "No serial corr. (BG)",                    "#60a5fa"),
+            (n_dw_ok,     "DW ≈ 2 (no lag-1)",                       GREEN),
+            ("5%",        "Significance level",                      ACCENT2),
+        ),
+        plot_card(
+            [dcc.Graph(id="regdiag-overview", figure=fig_regdiag_overview(), config=PLOTLY_CFG)],
+            label="All-variable overview  ·  green = homoskedastic / no serial correlation / DW≈2",
+        ),
+        plot_card(
+            [dcc.Graph(id="regdiag-variable", config=PLOTLY_CFG)],
+            label="Per-variable detail  ·  BP & BG significance + Durbin-Watson gauge",
+        ),
+
         DIAG_THEORY,
     ], style={"maxWidth": "1400px", "margin": "0 auto"}),
 )
@@ -1947,7 +2727,7 @@ app.layout = html.Div([
     ),
     dbc.Container(
         dbc.Tabs(
-            [tab_exploration, tab_stationarity, tab_cointegration, tab_causality, tab_diagnostics],
+            [tab_exploration, tab_stationarity, tab_cointegration, tab_causality, tab_diagnostics, tab_map],
             id="main-tabs",
             active_tab="tab-exploration",
             style={"borderBottom": f"1px solid {BORDER}", "fontFamily": FONT_MONO},
@@ -1961,6 +2741,7 @@ app.layout = html.Div([
 # ─────────────────────────────────────────────────────────────────────────────
 #  CALLBACKS
 # ─────────────────────────────────────────────────────────────────────────────
+register_map_callbacks(app)
 
 @callback(
     Output("acf-pacf-plot", "figure"),
@@ -2011,6 +2792,16 @@ def update_diag_panel(col):
     if not col or col not in DIAG_RES:
         return go.Figure()
     return fig_diag_variable(col)
+
+
+@callback(
+    Output("regdiag-variable", "figure"),
+    Input("diag-var", "value"),
+)
+def update_regdiag_panel(col):
+    if not col or col not in REGDIAG_RES:
+        return go.Figure()
+    return fig_regdiag_variable(col)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
