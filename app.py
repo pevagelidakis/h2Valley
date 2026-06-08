@@ -1726,9 +1726,28 @@ DIAG_THEORY = html.Div([
                 "The Breusch-Godfrey (LM) test checks for serial correlation in regression residuals "
                 "up to a chosen lag p. It is more general than Durbin-Watson: it handles higher-order "
                 "autocorrelation and stays valid even when the regressors include lagged dependent "
-                "variables. It regresses the residuals on the original regressors plus their own p lags.",
+                "variables. It regresses the residuals on the original regressors plus their own p lags."
+                "Consider the linear regression"
+                r"$$Y_t=\beta_1+\beta_2X_{t,1}+\beta_3X_{t,2}+u_t,$$"
+                r"where the error term may follow an autoregressive process of order $p$,"
+                r"$$u_t=\rho_1u_{t-1}+\rho_2u_{t-2}+\cdots+\rho_pu_{t-p}+\varepsilon_t.$$"
+                "The Breusch-Godfrey (BG) test is designed to detect serial correlation in the regression errors by testing the joint null hypothesis"
+                r"$$H_0:\rho_1=\rho_2=\cdots=\rho_p=0$$"
+                r"against the alternative that at least one $\rho_i\neq 0$. Under $H_0$, the errors are not autocorrelated up to lag $p$."
+                "The test proceeds by first estimating the original regression using ordinary least squares (OLS) "
+                r"and obtaining the residuals $\hat u_t$. An auxiliary regression is then estimated in which the residuals"
+                r" are regressed on the original explanatory variables and on $p$ lagged residuals:"
+                r"$$\hat u_t = \alpha_0 +\alpha_1X_{t,1} +\alpha_2X_{t,2} +\rho_1\hat u_{t-1} +\rho_2\hat u_{t-2} +\cdots +\rho_p\hat u_{t-p} +\varepsilon_t.$$"
+                r"The inclusion of the original regressors ensures that any explanatory power attributed to "
+                r"the lagged residuals reflects serial dependence in the errors rather than variation already"
+                r" explained by the model. Let $R^2$ denote the coefficient of determination from this auxiliary regression."
+                r" If the first $p$ observations are omitted, the effective sample size is $n=T-p$; alternatively"
+                r" , some implementations retain all $T$ observations by replacing unavailable lagged residuals with zeros.",
                 "Test statistic (LM):",
-                r"$$LM = n\,R^2_{aux} \;\sim\; \chi^2(p)$$"
+                r"$LM=nR^2.$"
+                r"From a mathematical perspective, the auxiliary regression tests whether the coefficients on the lagged residuals are jointly equal to zero. If the null hypothesis is true, the lagged residuals should not provide additional explanatory power, implying that $R^2$ remains close to zero. Conversely, if serial correlation is present, the lagged residuals help explain the current residual, causing $R^2$ to increase. Breusch and Godfrey showed that, under $H_0$ and for large samples"
+                r"$$nR^2 \xrightarrow{d} \chi^2_p,$$"
+                r"where $p$ is the number of lagged residuals included in the auxiliary regression. Therefore, the null hypothesis of no serial correlation is rejected when the observed value of $nR^2$ exceeds the appropriate critical value from the $\chi^2_p$ distribution."
                 "\n\nfrom the auxiliary regression of $\\hat{e}_t$ on the original regressors and the "
                 "lagged residuals $\\hat{e}_{t-1}, \\dots, \\hat{e}_{t-p}$. Tested here up to $p = 12$.",
                 "No serial correlation in the residuals up to lag p.",
@@ -1746,14 +1765,15 @@ DIAG_THEORY = html.Div([
         html.Div([
             _latex_card(
                 "Durbin-Watson Test", "DW", GREEN,
-                "The Durbin-Watson statistic measures first-order (lag-1) serial correlation of "
-                "regression residuals. It ranges from 0 to 4: a value near 2 indicates no "
-                "autocorrelation, below 2 indicates positive autocorrelation (consecutive residuals "
-                "move together), and above 2 indicates negative autocorrelation.",
+                "The Durbin-Watson test is used to detect autocorrelation (specifically first-order serial correlation) "
+                "in the residuals of a regression model. If your data is time-series, errors often correlate with their " \
+                "own past values, violating the OLS assumption that errors are independent.",
                 "Test statistic:",
+                "The test statistic is calculated as the sum of squared differences between consecutive residuals " \
+                "divided by the total sum of squared residuals: "
                 r"$$DW = \frac{\sum_{t=2}^{n}\left(\hat{e}_t - \hat{e}_{t-1}\right)^2}"
                 r"{\sum_{t=1}^{n}\hat{e}_t^{\,2}} \;\approx\; 2\left(1 - \hat{\rho}_1\right)$$"
-                "\n\nwhere $\\hat{\\rho}_1$ is the lag-1 residual autocorrelation. The approximation "
+                "\n\nwhere $\\hat{e}_t$ is the residuals at time $t$, and $\\hat{\\rho}_1$ is the lag-1 residual autocorrelation. The approximation "
                 "shows the mapping: $\\hat{\\rho}_1 = 0 \\Rightarrow DW \\approx 2$, "
                 "$\\hat{\\rho}_1 = 1 \\Rightarrow DW \\approx 0$.",
                 "No first-order serial correlation (ρ₁ = 0, DW ≈ 2).",
@@ -1764,9 +1784,7 @@ DIAG_THEORY = html.Div([
                 "no-correlation band is tight around 2 (we flag 1.5 ≤ DW ≤ 2.5 as clear).",
                 "Detects only lag-1 autocorrelation and is invalid when regressors include lagged "
                 "dependent variables.",
-                caveats="For higher-order or seasonal autocorrelation, or models with lagged "
-                        "regressors, use Breusch-Godfrey instead. There is no exact p-value — the "
-                        "classical d_L / d_U bounds are tabulated.",
+                caveats=dcc.Markdown(r"It is only valid for first-order autoregressive processes ($AR(1)$), and it is biased if there is a lagged dependent variable (e.g., $y_{t-1}$) as an independent variable.",mathjax=True),
             ),
             # Empty spacer card to maintain grid symmetry
             html.Div(style={"width": "50%"}),
