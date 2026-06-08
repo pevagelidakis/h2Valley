@@ -1544,6 +1544,41 @@ def theory_card(title, tag, color, paragraphs, math_eq=None, h0=None, h1=None):
     return html.Div(children, className="theory-card")
 
 
+def callout(kind, title, intro, items, ordered=True):
+    """Structured note / recommendation box.
+
+    kind    : 'tip' (green) or 'note' (amber)
+    title   : short heading shown next to an icon
+    intro   : optional one-line framing sentence (str or list of components)
+    items   : list of steps. Each item is either a plain string, or a
+              (lead, rest) tuple where `lead` is emphasised and `rest` follows.
+    ordered : True → numbered list (workflows), False → bulleted list (notes)
+    """
+    icon = "📋" if kind == "tip" else "⚠"
+    box_cls = "callout callout-tip" if kind == "tip" else "callout callout-note"
+    head = html.Div([
+        html.Span(icon, className="callout-icon"),
+        html.Span(title, className="callout-title"),
+    ], className="callout-head")
+
+    body_children = []
+    if intro:
+        body_children.append(html.P(intro, className="callout-intro"))
+    lis = []
+    for it in items:
+        if isinstance(it, (tuple, list)):
+            lead, rest = it
+            lis.append(html.Li([html.B(lead, className="callout-lead"), rest],
+                               className="callout-li"))
+        else:
+            lis.append(html.Li(it, className="callout-li"))
+    list_tag = html.Ol if ordered else html.Ul
+    body_children.append(list_tag(lis, className="callout-list"))
+    body = html.Div(body_children, className="callout-body")
+
+    return html.Div([head, body], className=box_cls)
+
+
 DIAG_THEORY = html.Div([
     html.Div("🔬 Diagnostic Tests: Theory & Interpretation", className="theory-title"),
 
@@ -1700,65 +1735,78 @@ DIAG_THEORY = html.Div([
         html.Div([
             _latex_card(
                 "Breusch-Pagan Test", "BP", AMBER,
-                "The Breusch-Pagan test detects heteroskedasticity — a residual variance that is "
-                "not constant but instead depends on the explanatory variables. It regresses the "
-                "squared residuals on the regressors: if those regressors explain significant "
-                "variation in the size of the residuals, the variance is non-constant.",
-                "Test statistic (LM):",
-                r"$$LM = n\,R^2_{aux} \;\sim\; \chi^2(k)$$"
-                "\n\nwhere $R^2_{aux}$ is the $R^2$ from regressing the squared residuals "
-                "$\\hat{e}_t^{\\,2}$ on the $k$ regressors (excluding the constant), and $n$ is the "
-                "sample size. Under $H_0$, $LM \\sim \\chi^2(k)$.",
-                "The residuals are homoskedastic (constant variance).",
-                "The residuals are heteroskedastic (variance depends on the regressors).",
-                "p < 0.05 rejects homoskedasticity — the spread of the residuals changes systematically "
-                "(e.g. grows over the season). Solar variables with large diurnal amplitude swings "
-                "typically show heteroskedastic residuals (red), which matters for the validity of "
-                "OLS standard errors.",
-                "Assumes the variance is a linear function of the regressors and is sensitive to "
-                "non-normality of the residuals.",
-                caveats="If residuals are heavy-tailed, prefer White's test (a more general, "
-                        "distribution-robust alternative). Computed here on the residuals of a "
-                        "constant + linear-trend regression.",
+                dcc.Markdown(
+                    r"""The Breusch-Pagan test checks for heteroskedasticity. OLS assumes $\mathrm{Var}(\varepsilon_i)=\sigma^2$.
+BP asks whether the variance changes systematically with explanatory variables.
+Alternative variance structure: $\mathrm{Var}(\varepsilon_i) = \sigma^2 h(Z_i)$.
+The intuition is simple: «Do the residuals become systematically more or less dispersed as $X$ changes?»
+The test exploits the fact that heteroskedasticity creates structure in the squared residuals.
+Estimate the model and obtain residuals $e_i$. Run the auxiliary regression:
+
+$$e_i^2 = \alpha_0 + \alpha_1 Z_{i1} + \cdots + \alpha_k Z_{ik} + v_i$$""",
+                    mathjax=True,
+                ),
+                "Test statistic:",
+                r"""The LM statistic is $LM = nR^2$, where $R^2$ comes from the auxiliary regression. Under $H_0$:
+
+$$LM \sim \chi_k^2$$
+
+Reject for large values of $LM$ or small p-values.""",
+                dcc.Markdown(r"$\forall i: \alpha_i = 0$. Namely, no evidence of heteroskedasticity (homoskedastic residuals).", mathjax=True),
+                dcc.Markdown(r"$\exists i: \alpha_i \neq 0$. Namely, evidence of heteroskedasticity (non-constant variance).",mathjax=True),
+                "p < 0.05 means the residuals have non-constant variance — use HAC standard errors or a GLS/WLS specification.",
+                "p < 0.05 signals heteroskedasticity: OLS coefficients remain unbiased but standard errors are wrong, invalidating inference. Use robust (HC) standard errors or re-specify the model.",
+                caveats=dcc.Markdown(
+                    r"""- Detects only the variance pattern specified in the auxiliary regression.
+- Sensitive to non-normality.
+- Indicates existence, not severity, of heteroskedasticity.
+- OLS coefficients remain unbiased: $E[\hat{\beta}] = \beta$. The main consequence is incorrect standard errors.""",
+                    mathjax=True,
+                ),
             ),
             _latex_card(
                 "Breusch-Godfrey Test", "BG", "#60a5fa",
-                "The Breusch-Godfrey (LM) test checks for serial correlation in regression residuals "
-                "up to a chosen lag p. It is more general than Durbin-Watson: it handles higher-order "
-                "autocorrelation and stays valid even when the regressors include lagged dependent "
-                "variables. It regresses the residuals on the original regressors plus their own p lags."
-                "Consider the linear regression"
-                r"$$Y_t=\beta_1+\beta_2X_{t,1}+\beta_3X_{t,2}+u_t,$$"
-                r"where the error term may follow an autoregressive process of order $p$,"
-                r"$$u_t=\rho_1u_{t-1}+\rho_2u_{t-2}+\cdots+\rho_pu_{t-p}+\varepsilon_t.$$"
-                "The Breusch-Godfrey (BG) test is designed to detect serial correlation in the regression errors by testing the joint null hypothesis"
-                r"$$H_0:\rho_1=\rho_2=\cdots=\rho_p=0$$"
-                r"against the alternative that at least one $\rho_i\neq 0$. Under $H_0$, the errors are not autocorrelated up to lag $p$."
-                "The test proceeds by first estimating the original regression using ordinary least squares (OLS) "
-                r"and obtaining the residuals $\hat u_t$. An auxiliary regression is then estimated in which the residuals"
-                r" are regressed on the original explanatory variables and on $p$ lagged residuals:"
-                r"$$\hat u_t = \alpha_0 +\alpha_1X_{t,1} +\alpha_2X_{t,2} +\rho_1\hat u_{t-1} +\rho_2\hat u_{t-2} +\cdots +\rho_p\hat u_{t-p} +\varepsilon_t.$$"
-                r"The inclusion of the original regressors ensures that any explanatory power attributed to "
-                r"the lagged residuals reflects serial dependence in the errors rather than variation already"
-                r" explained by the model. Let $R^2$ denote the coefficient of determination from this auxiliary regression."
-                r" If the first $p$ observations are omitted, the effective sample size is $n=T-p$; alternatively"
-                r" , some implementations retain all $T$ observations by replacing unavailable lagged residuals with zeros.",
+                dcc.Markdown(
+                    r"""The Breusch-Godfrey (LM) test checks for serial correlation in regression residuals
+up to a chosen lag $p$. It is more general than Durbin-Watson: it handles higher-order
+autocorrelation and stays valid even when the regressors include lagged dependent variables.
+It regresses the residuals on the original regressors plus their own $p$ lags.
+
+Consider the linear regression $Y_t = \beta_1 + \beta_2 X_{t,1} + \beta_3 X_{t,2} + u_t$,
+where the error term may follow an autoregressive process of order $p$:
+
+$$u_t = \rho_1 u_{t-1} + \rho_2 u_{t-2} + \cdots + \rho_p u_{t-p} + \varepsilon_t$$
+
+The test estimates the original regression using OLS and obtains residuals $\hat{u}_t$.
+An auxiliary regression is then run:
+
+$$\hat{u}_t = \alpha_0 + \alpha_1 X_{t,1} + \alpha_2 X_{t,2} + \rho_1 \hat{u}_{t-1} + \cdots + \rho_p \hat{u}_{t-p} + \varepsilon_t$$
+
+The inclusion of the original regressors ensures that any explanatory power attributed to
+the lagged residuals reflects serial dependence in the errors rather than variation already
+explained by the model.""",
+                    mathjax=True,
+                ),
                 "Test statistic (LM):",
-                r"$LM=nR^2.$"
-                r"From a mathematical perspective, the auxiliary regression tests whether the coefficients on the lagged residuals are jointly equal to zero. If the null hypothesis is true, the lagged residuals should not provide additional explanatory power, implying that $R^2$ remains close to zero. Conversely, if serial correlation is present, the lagged residuals help explain the current residual, causing $R^2$ to increase. Breusch and Godfrey showed that, under $H_0$ and for large samples"
-                r"$$nR^2 \xrightarrow{d} \chi^2_p,$$"
-                r"where $p$ is the number of lagged residuals included in the auxiliary regression. Therefore, the null hypothesis of no serial correlation is rejected when the observed value of $nR^2$ exceeds the appropriate critical value from the $\chi^2_p$ distribution."
-                "\n\nfrom the auxiliary regression of $\\hat{e}_t$ on the original regressors and the "
-                "lagged residuals $\\hat{e}_{t-1}, \\dots, \\hat{e}_{t-p}$. Tested here up to $p = 12$.",
-                "No serial correlation in the residuals up to lag p.",
-                "The residuals are serially correlated at one or more lags ≤ p.",
-                "p < 0.05 means the residuals are autocorrelated, so the trend-only model has missed "
-                "dynamic structure. For these meteorological series the diurnal cycle remains in the "
-                "residuals, so BG is overwhelmingly significant (red) — pointing toward an AR / seasonal "
-                "specification.",
+                r"""Let $R^2$ be the coefficient of determination from the auxiliary regression. The LM statistic is:
+
+$$LM = nR^2$$
+
+If the null hypothesis is true, the lagged residuals have no explanatory power and $R^2 \approx 0$.
+If serial correlation is present, $R^2$ increases. Breusch and Godfrey showed that under $H_0$:
+
+$$nR^2 \xrightarrow{d} \chi^2_p$$
+
+where $p$ is the number of lagged residuals in the auxiliary regression. Tested here up to $p = 12$.""",
+                dcc.Markdown(r"$\rho_1 = \rho_2 = \cdots = \rho_p = 0$: No serial correlation in the residuals up to lag p.",mathjax=True),
+                dcc.Markdown(r"$\exists i: \rho_i \neq 0$: The residuals are serially correlated at one or more lags ≤ p.",mathjax=True),
+                dcc.Markdown(r"$p < 0.05$ means the residuals are autocorrelated, so the trend-only model has missed "
+                        r"dynamic structure. For these meteorological series the diurnal cycle remains in the "
+                        r"residuals, so BG is overwhelmingly significant (red) — pointing toward an AR / seasonal "
+                        r"specification.", mathjax=True),
                 "More powerful and general than Durbin-Watson, but the chosen lag p matters.",
-                caveats="With strong daily seasonality, a small p can miss the 24-hour cycle — set "
-                        "p ≥ 24 to capture it. Asymptotic χ² approximation; reliable for large n.",
+                caveats=dcc.Markdown(r"With strong daily seasonality, a small p can miss the 24-hour cycle — set "
+                        r"$p ≥ 24$ to capture it. Asymptotic $\chi^2$ approximation; reliable for large n.", mathjax=True),
             ),
         ], className="theory-row"),
         # Row: Durbin-Watson + spacer
@@ -1776,8 +1824,8 @@ DIAG_THEORY = html.Div([
                 "\n\nwhere $\\hat{e}_t$ is the residuals at time $t$, and $\\hat{\\rho}_1$ is the lag-1 residual autocorrelation. The approximation "
                 "shows the mapping: $\\hat{\\rho}_1 = 0 \\Rightarrow DW \\approx 2$, "
                 "$\\hat{\\rho}_1 = 1 \\Rightarrow DW \\approx 0$.",
-                "No first-order serial correlation (ρ₁ = 0, DW ≈ 2).",
-                "First-order serial correlation is present (ρ₁ ≠ 0).",
+                dcc.Markdown(r"No first-order serial correlation ($\rho_1 = 0, DW \approx 2$).", mathjax=True),
+                dcc.Markdown(r"First-order serial correlation is present ($\rho_1 \neq 0$).", mathjax=True),
                 "DW far below 2 (toward 0) signals strong positive autocorrelation; toward 4 signals "
                 "negative. For the solar series the trend-regression residuals carry the diurnal cycle, "
                 "so DW sits near 0. Exact decision bounds depend on n and k; for large n the "
@@ -1791,16 +1839,31 @@ DIAG_THEORY = html.Div([
         ], className="theory-row"),
     ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
 
-    html.Div([
-        html.B("📋 Recommended workflow: ", style={"color": GREEN}),
-        "(1) Check normality with all three tests (KS, SW, JB) — agreement across tests gives confidence. "
-        "(2) Inspect the Q-Q plot visually — a few outliers can dominate the KS/SW statistics. "
-        "(3) Use Ljung-Box at lag 24 to confirm whether the diurnal cycle has been captured by your model. "
-        "(4) Use the HQC-optimal lag as the starting point for AR/ARIMA order selection — "
-        "then refine with AIC/BIC on the differenced series. "
-        "(5) After fitting a model, re-run Breusch-Godfrey / Durbin-Watson on its residuals to confirm "
-        "the serial correlation is gone, and Breusch-Pagan to check the variance is stable.",
-    ], className="tip-box"),
+    callout(
+        "tip",
+        "Recommended workflow",
+        "A practical order of operations for getting from a raw series to a model you can defend:",
+        [
+            ("Test normality with all three tests together. ",
+             "KS, Shapiro-Wilk and Jarque-Bera each probe a different feature — the whole "
+             "distribution, the Q-Q fit, and skew/kurtosis respectively. When they agree, the "
+             "verdict is robust; when they disagree, the disagreement itself is diagnostic."),
+            ("Always read the Q-Q plot, not just the p-value. ",
+             "At several thousand observations even trivial departures from normality become "
+             "'significant'. The plot tells you whether that matters in practice — a few outliers "
+             "in the tails versus a genuinely wrong shape."),
+            ("Use Ljung-Box at lag 24 as your diurnal check. ",
+             "A significant statistic there is the signature of an uncaptured daily cycle — exactly "
+             "what you expect before modelling, and what should disappear afterwards."),
+            ("Let the HQC-optimal lag seed your AR/ARIMA order. ",
+             "Treat it as a principled starting point, then refine with AIC/BIC on the differenced "
+             "(stationary) series."),
+            ("Re-run the residual diagnostics on the fitted model. ",
+             "Breusch-Godfrey and Durbin-Watson should now show no serial correlation, and "
+             "Breusch-Pagan a stable variance. That confirmation — not the raw-series result — is "
+             "what actually validates the model."),
+        ],
+    ),
 
 ], className="theory-section")
 
@@ -1915,12 +1978,26 @@ STATION_THEORY = html.Div([
                 "The series is trend-stationary with a single structural break occurring at an unknown point in time."),
         ], className="theory-row"),
     ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
-    html.Div([
-        html.B("⚠ Interpretation note: ", style={"color": AMBER}),
-        "No single test is definitive. Use ADF (H₀: unit root) and KPSS (H₀: stationary) together for robust conclusions. "
-        "If ADF rejects AND KPSS fails to reject → strong stationarity evidence. "
-        "For series with structural breaks (zenith, shortwave radiation) Zivot-Andrews is most reliable."
-    ], className="warn-box"),
+    callout(
+        "note",
+        "Interpreting the stationarity suite",
+        "No single unit-root test is decisive — each trades statistical power against robustness, "
+        "so read the four as a panel rather than in isolation:",
+        [
+            ("Pair the opposite nulls. ",
+             "ADF and PP take H₀ = 'unit root'; KPSS takes H₀ = 'stationary'. Because their "
+             "hypotheses are reversed, their agreement is genuine corroboration, not coincidence."),
+            ("The decisive pattern. ",
+             "ADF/PP reject and KPSS fails to reject ⟹ confident stationarity; the mirror image ⟹ "
+             "confident non-stationarity. Mixed signals usually flag a near-unit-root or a "
+             "structural break."),
+            ("Suspect a break? Trust Zivot-Andrews. ",
+             "A single shift in level or trend — as in zenith or shortwave radiation — can fool "
+             "ADF/PP into reporting non-stationarity. Zivot-Andrews estimates the break date "
+             "endogenously and tests around it."),
+        ],
+        ordered=False,
+    ),
 ], className="theory-section")
 
 
@@ -2014,13 +2091,27 @@ COINT_THEORY = html.Div([
                 dcc.Markdown(r"$H_1$: Residuals are stationary → series ARE cointegrated", mathjax=True)),
         ], className="theory-row"),            
     ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
-    html.Div([
-        html.B("⚠ Test comparison: ", style={"color": AMBER}),
-        "EG is simple but sensitive to which variable is regressed on which (asymmetry). "
-        "PO corrects for heteroscedastic errors without lag selection. "
-        "Johansen detects multiple cointegrating vectors and is unaffected by variable ordering. "
-        "Use all three: agreement across tests gives high-confidence cointegration evidence."
-    ], className="warn-box"),
+    callout(
+        "note",
+        "Choosing among the cointegration tests",
+        "All three answer the same question — do these series share a long-run equilibrium? — but "
+        "with different strengths. Run them together and weight the agreement:",
+        [
+            ("Engle-Granger (EG). ",
+             "Transparent and easy to interpret, but asymmetric — regressing Y on X can disagree "
+             "with X on Y — and it assumes well-behaved residuals."),
+            ("Phillips-Ouliaris (PO). ",
+             "A residual-based test like EG, but robust to serially correlated and heteroskedastic "
+             "errors, with no lag length to choose."),
+            ("Johansen. ",
+             "The most general: it works inside a VAR, can detect more than one cointegrating "
+             "relationship, and is invariant to which variable is ordered first."),
+            ("Bottom line. ",
+             "When all three concur you have high-confidence evidence of a genuine equilibrium; "
+             "when they split, prefer Johansen and inspect the cointegrating residuals directly."),
+        ],
+        ordered=False,
+    ),
 ], className="theory-section")
 
 
@@ -2171,13 +2262,28 @@ GRANGER_THEORY = html.Div([
                 ),
                 ], className="theory-row"),
     ], className="theory-grid", style={"border": f"1px solid {BORDER}", "borderRadius": "10px", "overflow": "hidden", "background": CARD2}),
-    html.Div([
-        html.B("Pipeline recommendation: ", style={"color": GREEN}),
-        "(1) Confirm Granger pairs with CCM to rule out confounding. "
-        "(2) Fit a VAR on the significant causal graph. "
-        "(3) Block-bootstrap VAR residuals with block size = 24h to preserve diurnal autocorrelation. "
-        "(4) Validate synthetic output with KS test + Lyapunov exponent comparison (target λ≈0.072) and Hurst H≈0.19."
-    ], className="tip-box"),
+    callout(
+        "tip",
+        "From Granger pairs to a validated simulator",
+        "Granger results are a starting hypothesis about predictive structure, not a causal "
+        "verdict. A defensible pipeline turns them into a trustworthy model:",
+        [
+            ("Screen out confounding with CCM. ",
+             "Convergent Cross Mapping checks whether an apparent Granger link survives in the "
+             "system's reconstructed state space, filtering out spurious edges created by a shared "
+             "driver (here, the solar cycle)."),
+            ("Fit a VAR on the surviving causal graph. ",
+             "Keep only the edges that pass, so the dynamics are estimated jointly rather than one "
+             "pair at a time."),
+            ("Block-bootstrap the VAR residuals in 24-hour blocks. ",
+             "Resampling in daily blocks preserves the diurnal autocorrelation that ordinary "
+             "i.i.d. resampling would erase."),
+            ("Validate the synthetic series against the original. ",
+             "Match both the statistics (a KS test on the distributions) and the dynamical "
+             "fingerprints — a Lyapunov exponent near λ ≈ 0.072 and a Hurst exponent near "
+             "H ≈ 0.19 — to confirm the simulation reproduces the real chaos, not just the mean."),
+        ],
+    ),
 ], className="theory-section")
 
 
@@ -2389,6 +2495,62 @@ body, html {{
 .h1-box {{ margin-top:4px; padding:5px 10px; background:rgba(45,212,160,0.08); border-radius:6px; border-left:2px solid {GREEN}; font-size:11.5px; color:{GREEN}; font-family:{FONT_MONO}; }}
 .warn-box {{ margin-top:16px; padding:12px 16px; background:rgba(245,166,35,0.07); border-radius:8px; border-left:3px solid {AMBER}; font-size:12px; color:{MUTED2}; line-height:1.75; }}
 .tip-box  {{ margin-top:16px; padding:12px 16px; background:rgba(45,212,160,0.07); border-radius:8px; border-left:3px solid {GREEN}; font-size:12px; color:{MUTED2}; line-height:1.75; }}
+
+/* Structured callouts (workflows / notes) — elegant section cards */
+.callout {{
+  margin-top: 22px;
+  border: 1px solid {BORDER};
+  border-top: 2px solid var(--accent);
+  border-radius: 12px;
+  background: linear-gradient(180deg, {CARD2} 0%, {CARD} 100%);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.32);
+  overflow: hidden;
+}}
+.callout-tip  {{ --accent: {GREEN}; --accent-soft: rgba(45,212,160,0.14); --accent-bg: rgba(45,212,160,0.07); }}
+.callout-note {{ --accent: {AMBER}; --accent-soft: rgba(245,166,35,0.16); --accent-bg: rgba(245,166,35,0.07); }}
+.callout-head {{
+  display: flex; align-items: center; gap: 11px;
+  padding: 13px 22px;
+  background: var(--accent-bg);
+  border-bottom: 1px solid {BORDER};
+}}
+.callout-icon {{
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 27px; height: 27px; border-radius: 8px;
+  background: var(--accent-soft); font-size: 14px; line-height: 1; flex-shrink: 0;
+}}
+.callout-title {{
+  font-family: {FONT_MONO}; font-weight: 700; font-size: 13px;
+  letter-spacing: .015em; color: var(--accent);
+}}
+.callout-body {{ padding: 17px 24px 19px; }}
+.callout-intro {{
+  font-size: 12.5px; color: {MUTED2}; line-height: 1.72; margin: 0 0 15px; max-width: 1000px;
+}}
+.callout-list {{ margin: 0; display: flex; flex-direction: column; gap: 12px; }}
+.callout-list li {{ font-size: 12.5px; color: {MUTED2}; line-height: 1.72; max-width: 1000px; }}
+.callout-lead {{ color: {TEXT}; font-weight: 700; }}
+
+/* Numbered badges for ordered workflows */
+ol.callout-list {{ counter-reset: step; list-style: none; padding-left: 0; }}
+ol.callout-list > li {{ position: relative; padding-left: 42px; min-height: 25px; }}
+ol.callout-list > li::before {{
+  counter-increment: step; content: counter(step);
+  position: absolute; left: 0; top: -1px;
+  width: 25px; height: 25px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: {FONT_MONO}; font-size: 11px; font-weight: 700;
+  background: var(--accent-soft); color: var(--accent);
+  border: 1px solid var(--accent);
+}}
+/* Accent dots for unordered notes */
+ul.callout-list {{ list-style: none; padding-left: 0; }}
+ul.callout-list > li {{ position: relative; padding-left: 24px; }}
+ul.callout-list > li::before {{
+  content: ''; position: absolute; left: 4px; top: 7px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}}
 
 /* Insight bar */
 .insight-bar {{
