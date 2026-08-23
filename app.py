@@ -1,6 +1,3 @@
-# python app.py
-# then open http://127.0.0.1:8050
-
 import warnings; warnings.filterwarnings("ignore")
 import math
 import numpy as np
@@ -28,6 +25,8 @@ import dash
 from dash import dcc, html, Input, Output, callback
 import dash_bootstrap_components as dbc
 from map_tab import tab_map, register_map_callbacks
+from synth_tab_control import tab_synth, register_synth_callbacks
+from synth2_tab import tab_synth2, register_synth2_callbacks
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONFIG
@@ -2907,7 +2906,7 @@ app.layout = html.Div([
     ),
     dbc.Container(
         dbc.Tabs(
-            [tab_exploration, tab_stationarity, tab_cointegration, tab_causality, tab_diagnostics, tab_map],
+            [tab_exploration, tab_stationarity, tab_cointegration, tab_causality, tab_diagnostics, tab_synth, tab_synth2, tab_map],
             id="main-tabs",
             active_tab="tab-exploration",
             style={"borderBottom": f"1px solid {BORDER}", "fontFamily": FONT_MONO},
@@ -2922,6 +2921,8 @@ app.layout = html.Div([
 #  CALLBACKS
 # ─────────────────────────────────────────────────────────────────────────────
 register_map_callbacks(app)
+register_synth_callbacks(app)
+register_synth2_callbacks(app)
 
 @callback(
     Output("acf-pacf-plot", "figure"),
