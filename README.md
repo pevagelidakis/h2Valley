@@ -27,7 +27,7 @@ output is interpretable from junior to expert level.
 - [Running on a remote / shared VM](#running-on-a-remote--shared-vm)
 - [Configuration](#configuration)
 - [Interpreting the results](#interpreting-the-results)
-- [Roadmap: synthetic data generation](#roadmap-synthetic-data-generation)
+- [Synthetic & dynamical-analysis tabs](#synthetic--dynamical-analysis-tabs)
 - [Troubleshooting](#troubleshooting)
 - [Reproducibility, data licensing & FAIR notes](#reproducibility-data-licensing--fair-notes)
 - [Acknowledgements](#acknowledgements)
@@ -84,12 +84,19 @@ be revisited once real data is available.
 
 ```
 .
-├── app.py                                              # Main Dash app: all tabs, tests, figures, theory, CSS
+├── app.py                                              # Main Dash app: exploration/stationarity/cointegration/
+│                                                        #   causality/diagnostics tabs, the statistical test
+│                                                        #   battery, figures, theory, CSS, app assembly
+├── cache_utils.py                                      # Shared on-disk memoization for every tab's precompute
 ├── map_tab.py                                          # EU hydrogen-production map tab (figures + callbacks)
+├── synth_tab_control.py                                # Class-I synthetic data tab (SARIMA shape-matching)
+├── synth2_tab.py                                       # Class-II synthetic data tab (IAAFT / bootstrap / copula)
+├── rqa_tab.py                                          # Class-III recurrence quantification analysis (RQA) tab
 ├── spg.csv                                             # Hourly PV/meteorological series (proxy dataset)
 ├── Hydrogen_production_capacity_2024__Update_2025__0_0.xlsx   # IEA plant-by-plant capacity (drives the map)
 ├── Hydrogen_trade_2024.xlsx                            # IEA hydrogen-trade reference data (included; not yet wired in)
 ├── callouts_preview.png                                # Visual reference for the theory callout cards
+├── .cache/                                             # On-disk precompute cache (git-ignored; see Configuration)
 └── README.md
 ```
 
@@ -213,9 +220,15 @@ Dash is running on http://0.0.0.0:8050/
 
 Then open **http://127.0.0.1:8050** in your browser.
 
-> **Startup takes a moment.** All tests are precomputed before the server binds the port
-> (stationarity, cointegration, Granger, normality, and the BP/BG/DW loop over
-> 4,213 rows × 20 variables). The page only loads once you see the “Dash is running” line.
+> **First run takes a moment; every run after that is fast.** All tests are precomputed
+> before the server binds the port (stationarity, cointegration, Granger, normality, and
+> the BP/BG/DW loop over 4,213 rows × 20 variables), and the SARIMA fits behind the
+> Class-1 synthetic-data tab run in the background. Every one of these results is cached
+> to disk in `.cache/` (see **Configuration**) the first time it's computed; a later
+> `python app.py` with an unchanged `spg.csv` loads them straight from disk instead of
+> redoing the work, so only the very first run — or a run after editing the analysis
+> config or the data — pays the full cost. The page only loads once you see the
+> “Dash is running” line.
 
 ---
 
@@ -254,6 +267,7 @@ auto-forwards the port (see the “Ports” panel); no manual tunnel required.
 | Map data path | `XLSX_PATH` in `map_tab.py` | Relative to launch dir; loader is resilient to header offsets. |
 | EU country filter | `EU_COUNTRIES` in `map_tab.py` | Edit to widen/narrow the map scope. |
 | Fonts | `EXTERNAL_STYLESHEETS` in `app.py` | Pulls IBM Plex from Google Fonts; see Troubleshooting for offline VMs. |
+| Precompute cache | `.cache/` (created on first run), via `cache_utils.py` | Delete this directory (or any one `.pkl` file in it) to force that block to recompute from scratch — e.g. after editing `spg.csv` or a test's config. Each cache entry is signature-tagged with the source file's size/mtime and the relevant config, so a changed `spg.csv` invalidates it automatically; nothing changes if you just restart the app. Not committed to git (see `.gitignore`). |
 
 ---
 
@@ -277,30 +291,36 @@ panel and weight the agreement.
 
 ---
 
-## Roadmap: synthetic data generation
+## Synthetic & dynamical-analysis tabs
 
-The diagnostics layer above is the foundation for the platform’s end goal — generating
-**synthetic hydrogen-production series** that are faithful on three axes:
+The diagnostics layer above is the foundation for the platform's end goal — generating
+**synthetic hydrogen-production series** that are faithful on three axes, plus a
+model-free way to *analyse* the third axis directly on the real data. All three are
+implemented, one tab each:
 
-1. **Shape fidelity** — peaks, valleys, ramp behaviour, and missing-data patterns match
-   the original visually and structurally.
-2. **Statistical fidelity** — matching moments (mean, variance, skew, kurtosis), the
-   marginal distribution, and the autocorrelation structure.
-3. **Dynamic fidelity** — preserving seasonality, trend, periodicity, stationarity
-   regime, and short/long-range dependence.
+1. **Shape fidelity** (`synth_tab_control.py`, tab *Synthetic Data I*) — peaks, valleys,
+   ramp behaviour and seasonal structure match the original visually and structurally. A
+   seasonal ARIMA (SARIMA) is identified per variable (periodogram → seasonal period,
+   ADF → differencing order, AICc/BIC stepwise search over the remaining orders) and
+   simulated for both shape validation and on-demand future projection.
+2. **Statistical fidelity** (`synth2_tab.py`, tab *Synthetic Data II*) — mean, variance,
+   skew, kurtosis and the full marginal distribution match exactly or to interpolation
+   accuracy, by construction. Three interpretable generators are offered: IAAFT
+   surrogates, circular block bootstrap, and a Gaussian-rank AR (copula) model.
+3. **Dynamic fidelity** (`rqa_tab.py`, tab *Recurrence (RQA)*) — rather than generating a
+   synthetic path, this tab reconstructs the real phase-space trajectory (Takens delay
+   embedding, with τ and m identified per variable via average mutual information and
+   false nearest neighbours) and quantifies recurrence — auto-, cross- and joint-
+   recurrence between two selected variables, with the full RQA measure set (RR, DET,
+   LAM, L, Lmax, divergence, entropy, trapping time). It is the direct, computable
+   counterpart to the chaos fingerprints (Lyapunov and Hurst exponents, CCM) referenced
+   in the Causality tab's theory panel.
 
-Candidate methods, to be chosen *from the EDA findings* rather than by default:
-
-- **Statistical** — ARIMA/SARIMA, GARCH (for volatility clustering).
-- **Probabilistic** — Gaussian processes, copula-based models.
-- **Deep learning** — TimeGAN, VAE generators, diffusion models.
-- **Hybrid** — decomposition (trend / seasonality / residual) with a model per
-  component.
-
-Planned validation of synthetic output: **KS test** and **KL divergence** against the
-original, visual overlays, and dynamic metrics (autocorrelation, and chaos fingerprints
-such as the Lyapunov and Hurst exponents). Interpretable methods are preferred when they
-perform comparably to deep-learning ones.
+Validation throughout favours the same panel-of-evidence principle as the rest of the
+app: KS tests and Wasserstein distance for the statistical match, ACF/PACF overlays for
+the shape and dependence match, and RQA measures compared across auto- vs. cross-
+recurrence for the dynamical match — interpretable methods over opaque ones wherever
+they perform comparably.
 
 ---
 

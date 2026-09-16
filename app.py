@@ -27,15 +27,20 @@ import dash_bootstrap_components as dbc
 from map_tab import tab_map, register_map_callbacks
 from synth_tab_control import tab_synth, register_synth_callbacks
 from synth2_tab import tab_synth2, register_synth2_callbacks
+from rqa_tab import tab_rqa, register_rqa_callbacks
+from cache_utils import make_signature, load_cache, save_cache
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
-CSV_PATH   = Path("spg.csv")
-NLAGS      = 48
-THRES      = 0.05
-MAX_LAG_GC = 6
-TS_POINTS  = 1200
+CSV_PATH    = Path("spg.csv")
+NLAGS       = 48
+THRES       = 0.05
+MAX_LAG_GC  = 6
+TS_POINTS   = 1200
+LB_LAGS     = [6, 12, 24]   # lags for Ljung-Box
+HQC_MAX_LAG = 12            # max AR order for HQC search
+BG_LAGS     = 12            # Breusch-Godfrey: test serial correlation up to this lag
 
 COLS = [
     "temperature_2_m_above_gnd", "relative_humidity_2_m_above_gnd",
@@ -231,275 +236,318 @@ AVAILABLE = [c for c in COLS if c in _df_raw.columns]
 DF        = _df_raw[AVAILABLE].copy()
 print(f"  {len(AVAILABLE)} columns, {len(DF):,} rows")
 
-# ── ACF / PACF ──────────────────────────────────────────────────────────────
-print("Computing ACF/PACF …")
-ACF_STATS: dict = {}
-for col in AVAILABLE:
-    s  = DF[col].dropna().values
-    cb = 1.96 / math.sqrt(len(s))
-    av, _ = acf(s, nlags=NLAGS, fft=True, alpha=0.05)
-    pv, _ = pacf(s, nlags=NLAGS, alpha=0.05)
-    pv    = np.clip(pv, -1.5, 1.5).tolist()
-    ACF_STATS[col] = dict(acf=av.tolist(), pacf=pv, conf=round(cb, 5))
 
-# ── Stationarity ─────────────────────────────────────────────────────────────
-print("Running stationarity tests …")
-STAT_RES: dict = {}
-for col in AVAILABLE:
-    s = DF[col].dropna().values
-    adf = adfuller(s, autolag="AIC")
-    try:    kp  = kpss(s, regression="c", nlags="auto")
-    except: kp  = (float("nan"), float("nan"), None, None)
-    try:    pp  = PhillipsPerron(s); pp_s, pp_p = pp.stat, pp.pvalue
-    except: pp_s, pp_p = float("nan"), float("nan")
-    try:    za  = zivot_andrews(s, maxlag=6, regression="ct"); za_s, za_p = za[0], za[1]
-    except: za_s, za_p = float("nan"), float("nan")
-    STAT_RES[col] = dict(
-        adf_stat=float(adf[0]), adf_p=float(adf[1]),
-        adf_lags=int(adf[2]),   adf_nobs=int(adf[3]),
-        kpss_stat=float(kp[0]), kpss_p=float(kp[1]),
-        pp_stat=float(pp_s),    pp_p=float(pp_p),
-        za_stat=float(za_s),    za_p=float(za_p),
-        adf_ok=bool(adf[1] < THRES),
-        kpss_ok=bool(kp[1] >= THRES),
-        pp_ok=bool(pp_p < THRES),
-        za_ok=bool(za_p < THRES),
-    )
-    print(f"  {LABELS.get(col, col):35s}  ADF p={pf(adf[1])}")
+def _run_precompute() -> dict:
+    """Run the full statistical test battery once: ACF/PACF, stationarity,
+    (Engle-Granger / Johansen / Phillips-Ouliaris) cointegration, Granger
+    causality, and the two diagnostics blocks. Pure function of DF/AVAILABLE
+    plus the module-level config above — this is exactly what gets cached to
+    disk below, so a later run with unchanged spg.csv and config can skip it
+    entirely."""
+    # ── ACF / PACF ──────────────────────────────────────────────────────────
+    print("Computing ACF/PACF …")
+    ACF_STATS: dict = {}
+    for col in AVAILABLE:
+        s  = DF[col].dropna().values
+        cb = 1.96 / math.sqrt(len(s))
+        av, _ = acf(s, nlags=NLAGS, fft=True, alpha=0.05)
+        pv, _ = pacf(s, nlags=NLAGS, alpha=0.05)
+        pv    = np.clip(pv, -1.5, 1.5).tolist()
+        ACF_STATS[col] = dict(acf=av.tolist(), pacf=pv, conf=round(cb, 5))
 
-# ── Cointegration ────────────────────────────────────────────────────────────
-print("Running cointegration tests …")
-COINT_RES: dict = {}
-for c1, c2 in COINT_PAIRS:
-    if c1 not in DF.columns or c2 not in DF.columns:
-        continue
-    s1, s2 = DF[c1].dropna().values, DF[c2].dropna().values
-    n  = min(len(s1), len(s2))
-    eg = coint(s1[:n], s2[:n])
-    key = f"{LABELS[c1]} ↔ {LABELS[c2]}"
-    COINT_RES[key] = dict(
-        c1=c1, c2=c2, label1=LABELS[c1], label2=LABELS[c2],
-        stat=float(eg[0]), p=float(eg[1]),
-        crit1=float(eg[2][0]), crit5=float(eg[2][1]), crit10=float(eg[2][2]),
-        sig=bool(eg[1] < THRES),
-    )
-    print(f"  {key[:55]:55s}  p={pf(eg[1])}")
-
-# ── Johansen Cointegration ────────────────────────────────────────────────────
-print("Running Johansen cointegration tests …")
-JOHANSEN_RES: dict = {}
-for c1, c2 in COINT_PAIRS:
-    if c1 not in DF.columns or c2 not in DF.columns:
-        continue
-    s1, s2 = DF[c1].dropna().values, DF[c2].dropna().values
-    n = min(len(s1), len(s2))
-    data2 = np.column_stack([s1[:n], s2[:n]])
-    key = f"{LABELS[c1]} ↔ {LABELS[c2]}"
-    try:
-        jres = coint_johansen(data2, det_order=0, k_ar_diff=1)
-        # Trace statistics and 5% critical values
-        trace_stat0  = float(jres.lr1[0])   # H0: rank=0
-        trace_stat1  = float(jres.lr1[1])   # H0: rank<=1
-        trace_crit0  = float(jres.cvt[0, 1])  # 5% crit, rank=0
-        trace_crit1  = float(jres.cvt[1, 1])  # 5% crit, rank<=1
-        # Max-eigenvalue statistics
-        maxeig_stat0 = float(jres.lr2[0])
-        maxeig_stat1 = float(jres.lr2[1])
-        maxeig_crit0 = float(jres.cvm[0, 1])
-        maxeig_crit1 = float(jres.cvm[1, 1])
-        # Determine rank (number of cointegrating vectors)
-        rank = 0
-        if trace_stat0 > trace_crit0:
-            rank = 1
-        if trace_stat1 > trace_crit1:
-            rank = 2
-        sig = rank >= 1
-        JOHANSEN_RES[key] = dict(
-            c1=c1, c2=c2, label1=LABELS[c1], label2=LABELS[c2],
-            trace_stat0=trace_stat0, trace_stat1=trace_stat1,
-            trace_crit0=trace_crit0, trace_crit1=trace_crit1,
-            maxeig_stat0=maxeig_stat0, maxeig_stat1=maxeig_stat1,
-            maxeig_crit0=maxeig_crit0, maxeig_crit1=maxeig_crit1,
-            rank=rank, sig=sig,
+    # ── Stationarity ─────────────────────────────────────────────────────────────
+    print("Running stationarity tests …")
+    STAT_RES: dict = {}
+    for col in AVAILABLE:
+        s = DF[col].dropna().values
+        adf = adfuller(s, autolag="AIC")
+        try:    kp  = kpss(s, regression="c", nlags="auto")
+        except: kp  = (float("nan"), float("nan"), None, None)
+        try:    pp  = PhillipsPerron(s); pp_s, pp_p = pp.stat, pp.pvalue
+        except: pp_s, pp_p = float("nan"), float("nan")
+        try:    za  = zivot_andrews(s, maxlag=6, regression="ct"); za_s, za_p = za[0], za[1]
+        except: za_s, za_p = float("nan"), float("nan")
+        STAT_RES[col] = dict(
+            adf_stat=float(adf[0]), adf_p=float(adf[1]),
+            adf_lags=int(adf[2]),   adf_nobs=int(adf[3]),
+            kpss_stat=float(kp[0]), kpss_p=float(kp[1]),
+            pp_stat=float(pp_s),    pp_p=float(pp_p),
+            za_stat=float(za_s),    za_p=float(za_p),
+            adf_ok=bool(adf[1] < THRES),
+            kpss_ok=bool(kp[1] >= THRES),
+            pp_ok=bool(pp_p < THRES),
+            za_ok=bool(za_p < THRES),
         )
-        print(f"  {key[:55]:55s}  rank={rank}  trace0={trace_stat0:.2f} (crit={trace_crit0:.2f})")
-    except Exception as e:
-        print(f"  {key[:55]:55s}  ERROR: {e}")
+        print(f"  {LABELS.get(col, col):35s}  ADF p={pf(adf[1])}")
 
-# ── Phillips-Ouliaris Cointegration ───────────────────────────────────────────
-print("Running Phillips-Ouliaris cointegration tests …")
-PO_RES: dict = {}
-for c1, c2 in COINT_PAIRS:
-    if c1 not in DF.columns or c2 not in DF.columns:
-        continue
-    s1, s2 = DF[c1].dropna().values, DF[c2].dropna().values
-    n = min(len(s1), len(s2))
-    key = f"{LABELS[c1]} ↔ {LABELS[c2]}"
-    try:
-        po      = phillips_ouliaris(s1[:n], s2[:n], trend="c", test_type="Zt")
-        po_stat = float(po.stat)
-        po_pval = float(po.pvalue)
-        sig     = po_pval < THRES
-        PO_RES[key] = dict(
+    # ── Cointegration ────────────────────────────────────────────────────────────
+    print("Running cointegration tests …")
+    COINT_RES: dict = {}
+    for c1, c2 in COINT_PAIRS:
+        if c1 not in DF.columns or c2 not in DF.columns:
+            continue
+        s1, s2 = DF[c1].dropna().values, DF[c2].dropna().values
+        n  = min(len(s1), len(s2))
+        eg = coint(s1[:n], s2[:n])
+        key = f"{LABELS[c1]} ↔ {LABELS[c2]}"
+        COINT_RES[key] = dict(
             c1=c1, c2=c2, label1=LABELS[c1], label2=LABELS[c2],
-            stat=po_stat, p=po_pval, sig=sig,
+            stat=float(eg[0]), p=float(eg[1]),
+            crit1=float(eg[2][0]), crit5=float(eg[2][1]), crit10=float(eg[2][2]),
+            sig=bool(eg[1] < THRES),
         )
-        print(f"  {key[:55]:55s}  Zt={po_stat:.4f}  p={pf(po_pval)}")
-    except Exception as e:
-        print(f"  {key[:55]:55s}  ERROR: {e}")
+        print(f"  {key[:55]:55s}  p={pf(eg[1])}")
 
-# ── Granger ──────────────────────────────────────────────────────────────────
-print("Running Granger causality tests …")
-GRANGER_RES: dict = {}
-_df_diff = DF.diff().dropna()
-for cause, effect in GRANGER_PAIRS:
-    if cause not in DF.columns or effect not in DF.columns:
-        continue
-    gc   = grangercausalitytests(_df_diff[[effect, cause]].values,
-                                  maxlag=MAX_LAG_GC, verbose=False)
-    pvals = {lag: gc[lag][0]["ssr_ftest"][1] for lag in gc}
-    min_p = min(pvals.values())
-    best  = min(pvals, key=pvals.get)
-    key   = f"{LABELS[cause]} → {LABELS[effect]}"
-    GRANGER_RES[key] = dict(
-        cause=cause, effect=effect,
-        label_c=LABELS[cause], label_e=LABELS[effect],
-        min_p=float(min_p), best_lag=int(best),
-        all_p={str(k): float(v) for k, v in pvals.items()},
-        sig=bool(min_p < THRES),
-    )
-    print(f"  {key[:60]:60s}  p={pf(min_p)}  lag={best}")
-
-print("All tests done ✔")
-
-n_stat = sum(1 for c in AVAILABLE if STAT_RES[c]["adf_ok"] or STAT_RES[c]["pp_ok"])
-n_co   = sum(1 for v in COINT_RES.values()   if v["sig"])
-n_joh  = sum(1 for v in JOHANSEN_RES.values() if v["sig"])
-n_po   = sum(1 for v in PO_RES.values()        if v["sig"])
-n_gc   = sum(1 for v in GRANGER_RES.values() if v["sig"])
-
-# ── Diagnostics: KS, Shapiro-Wilk, Jarque-Bera, Ljung-Box, Hannan-Quinn ────
-print("Running diagnostics tests …")
-DIAG_RES: dict = {}
-LB_LAGS = [6, 12, 24]   # lags for Ljung-Box
-HQC_MAX_LAG = 12         # max AR order for HQC search
-
-for col in AVAILABLE:
-    s = DF[col].dropna().values
-    n = len(s)
-
-    # --- Kolmogorov-Smirnov (against N(μ,σ)) ---
-    mu, sigma = float(np.mean(s)), float(np.std(s, ddof=1))
-    ks_stat, ks_p = sp_stats.kstest(s, "norm", args=(mu, sigma))
-
-    # --- Shapiro-Wilk (capped at 5000 for speed) ---
-    sw_sample = s[:5000] if n > 5000 else s
-    sw_stat, sw_p = sp_stats.shapiro(sw_sample)
-
-    # --- Jarque-Bera ---
-    jb_stat, jb_p = sp_stats.jarque_bera(s)
-    skew  = float(sp_stats.skew(s))
-    kurt  = float(sp_stats.kurtosis(s))          # excess kurtosis
-
-    # --- Ljung-Box (at lags 6, 12, 24) ---
-    lb_df  = acorr_ljungbox(s, lags=LB_LAGS, return_df=True)
-    lb_stats = {lag: float(lb_df.loc[lag, "lb_stat"])  for lag in LB_LAGS}
-    lb_pvals = {lag: float(lb_df.loc[lag, "lb_pvalue"]) for lag in LB_LAGS}
-    lb_min_p  = min(lb_pvals.values())
-    lb_best_l = min(lb_pvals, key=lb_pvals.get)
-
-    # --- Hannan-Quinn Criterion (AR model order selection) ---
-    best_hqc_val = np.inf; best_hqc_lag = 1; hqc_by_lag = {}
-    for p in range(1, HQC_MAX_LAG + 1):
+    # ── Johansen Cointegration ────────────────────────────────────────────────────
+    print("Running Johansen cointegration tests …")
+    JOHANSEN_RES: dict = {}
+    for c1, c2 in COINT_PAIRS:
+        if c1 not in DF.columns or c2 not in DF.columns:
+            continue
+        s1, s2 = DF[c1].dropna().values, DF[c2].dropna().values
+        n = min(len(s1), len(s2))
+        data2 = np.column_stack([s1[:n], s2[:n]])
+        key = f"{LABELS[c1]} ↔ {LABELS[c2]}"
         try:
-            mod = AutoReg(s, lags=p, old_names=False).fit()
-            k   = p + 1  # AR coefficients + intercept
-            hqc = -2 * mod.llf + 2 * k * np.log(np.log(n))
-            hqc_by_lag[p] = float(hqc)
-            if hqc < best_hqc_val:
-                best_hqc_val = hqc; best_hqc_lag = p
+            jres = coint_johansen(data2, det_order=0, k_ar_diff=1)
+            # Trace statistics and 5% critical values
+            trace_stat0  = float(jres.lr1[0])   # H0: rank=0
+            trace_stat1  = float(jres.lr1[1])   # H0: rank<=1
+            trace_crit0  = float(jres.cvt[0, 1])  # 5% crit, rank=0
+            trace_crit1  = float(jres.cvt[1, 1])  # 5% crit, rank<=1
+            # Max-eigenvalue statistics
+            maxeig_stat0 = float(jres.lr2[0])
+            maxeig_stat1 = float(jres.lr2[1])
+            maxeig_crit0 = float(jres.cvm[0, 1])
+            maxeig_crit1 = float(jres.cvm[1, 1])
+            # Determine rank (number of cointegrating vectors)
+            rank = 0
+            if trace_stat0 > trace_crit0:
+                rank = 1
+            if trace_stat1 > trace_crit1:
+                rank = 2
+            sig = rank >= 1
+            JOHANSEN_RES[key] = dict(
+                c1=c1, c2=c2, label1=LABELS[c1], label2=LABELS[c2],
+                trace_stat0=trace_stat0, trace_stat1=trace_stat1,
+                trace_crit0=trace_crit0, trace_crit1=trace_crit1,
+                maxeig_stat0=maxeig_stat0, maxeig_stat1=maxeig_stat1,
+                maxeig_crit0=maxeig_crit0, maxeig_crit1=maxeig_crit1,
+                rank=rank, sig=sig,
+            )
+            print(f"  {key[:55]:55s}  rank={rank}  trace0={trace_stat0:.2f} (crit={trace_crit0:.2f})")
+        except Exception as e:
+            print(f"  {key[:55]:55s}  ERROR: {e}")
+
+    # ── Phillips-Ouliaris Cointegration ───────────────────────────────────────────
+    print("Running Phillips-Ouliaris cointegration tests …")
+    PO_RES: dict = {}
+    for c1, c2 in COINT_PAIRS:
+        if c1 not in DF.columns or c2 not in DF.columns:
+            continue
+        s1, s2 = DF[c1].dropna().values, DF[c2].dropna().values
+        n = min(len(s1), len(s2))
+        key = f"{LABELS[c1]} ↔ {LABELS[c2]}"
+        try:
+            po      = phillips_ouliaris(s1[:n], s2[:n], trend="c", test_type="Zt")
+            po_stat = float(po.stat)
+            po_pval = float(po.pvalue)
+            sig     = po_pval < THRES
+            PO_RES[key] = dict(
+                c1=c1, c2=c2, label1=LABELS[c1], label2=LABELS[c2],
+                stat=po_stat, p=po_pval, sig=sig,
+            )
+            print(f"  {key[:55]:55s}  Zt={po_stat:.4f}  p={pf(po_pval)}")
+        except Exception as e:
+            print(f"  {key[:55]:55s}  ERROR: {e}")
+
+    # ── Granger ──────────────────────────────────────────────────────────────────
+    print("Running Granger causality tests …")
+    GRANGER_RES: dict = {}
+    _df_diff = DF.diff().dropna()
+    for cause, effect in GRANGER_PAIRS:
+        if cause not in DF.columns or effect not in DF.columns:
+            continue
+        gc   = grangercausalitytests(_df_diff[[effect, cause]].values,
+                                      maxlag=MAX_LAG_GC, verbose=False)
+        pvals = {lag: gc[lag][0]["ssr_ftest"][1] for lag in gc}
+        min_p = min(pvals.values())
+        best  = min(pvals, key=pvals.get)
+        key   = f"{LABELS[cause]} → {LABELS[effect]}"
+        GRANGER_RES[key] = dict(
+            cause=cause, effect=effect,
+            label_c=LABELS[cause], label_e=LABELS[effect],
+            min_p=float(min_p), best_lag=int(best),
+            all_p={str(k): float(v) for k, v in pvals.items()},
+            sig=bool(min_p < THRES),
+        )
+        print(f"  {key[:60]:60s}  p={pf(min_p)}  lag={best}")
+
+    print("All tests done ✔")
+
+    # ── Diagnostics: KS, Shapiro-Wilk, Jarque-Bera, Ljung-Box, Hannan-Quinn ────
+    print("Running diagnostics tests …")
+    DIAG_RES: dict = {}
+
+    for col in AVAILABLE:
+        s = DF[col].dropna().values
+        n = len(s)
+
+        # --- Kolmogorov-Smirnov (against N(μ,σ)) ---
+        mu, sigma = float(np.mean(s)), float(np.std(s, ddof=1))
+        ks_stat, ks_p = sp_stats.kstest(s, "norm", args=(mu, sigma))
+
+        # --- Shapiro-Wilk (capped at 5000 for speed) ---
+        sw_sample = s[:5000] if n > 5000 else s
+        sw_stat, sw_p = sp_stats.shapiro(sw_sample)
+
+        # --- Jarque-Bera ---
+        jb_stat, jb_p = sp_stats.jarque_bera(s)
+        skew  = float(sp_stats.skew(s))
+        kurt  = float(sp_stats.kurtosis(s))          # excess kurtosis
+
+        # --- Ljung-Box (at lags 6, 12, 24) ---
+        lb_df  = acorr_ljungbox(s, lags=LB_LAGS, return_df=True)
+        lb_stats = {lag: float(lb_df.loc[lag, "lb_stat"])  for lag in LB_LAGS}
+        lb_pvals = {lag: float(lb_df.loc[lag, "lb_pvalue"]) for lag in LB_LAGS}
+        lb_min_p  = min(lb_pvals.values())
+        lb_best_l = min(lb_pvals, key=lb_pvals.get)
+
+        # --- Hannan-Quinn Criterion (AR model order selection) ---
+        best_hqc_val = np.inf; best_hqc_lag = 1; hqc_by_lag = {}
+        for p in range(1, HQC_MAX_LAG + 1):
+            try:
+                mod = AutoReg(s, lags=p, old_names=False).fit()
+                k   = p + 1  # AR coefficients + intercept
+                hqc = -2 * mod.llf + 2 * k * np.log(np.log(n))
+                hqc_by_lag[p] = float(hqc)
+                if hqc < best_hqc_val:
+                    best_hqc_val = hqc; best_hqc_lag = p
+            except Exception:
+                hqc_by_lag[p] = float("nan")
+
+        DIAG_RES[col] = dict(
+            # KS
+            ks_stat=float(ks_stat), ks_p=float(ks_p), ks_ok=bool(ks_p >= THRES),
+            mu=mu, sigma=sigma,
+            # SW
+            sw_stat=float(sw_stat), sw_p=float(sw_p), sw_ok=bool(sw_p >= THRES),
+            sw_n=int(len(sw_sample)),
+            # JB
+            jb_stat=float(jb_stat), jb_p=float(jb_p), jb_ok=bool(jb_p >= THRES),
+            skew=skew, kurt=kurt,
+            # LB
+            lb_stats=lb_stats, lb_pvals=lb_pvals,
+            lb_min_p=lb_min_p, lb_best_lag=lb_best_l,
+            lb_ok=bool(lb_min_p >= THRES),      # fail-to-reject → no autocorrelation
+            # HQC
+            hqc_by_lag=hqc_by_lag,
+            best_hqc_val=float(best_hqc_val),
+            best_hqc_lag=int(best_hqc_lag),
+        )
+        print(f"  {LABELS.get(col, col):35s}  KS p={pf(ks_p)}  SW p={pf(sw_p)}  JB p={pf(jb_p)}  LB_min_p={pf(lb_min_p)}  HQC_lag={best_hqc_lag}")
+
+    print("Diagnostics done ✔")
+
+    # ── Regression-residual diagnostics: Breusch-Pagan, Breusch-Godfrey, Durbin-Watson ──
+    #   These three classical tests operate on the residuals of a regression, so for each
+    #   variable we fit a simple model — a constant plus a linear time trend
+    #   (y_t = α + β·t + e_t) — and test its residuals e_t for:
+    #     · heteroskedasticity   → Breusch-Pagan
+    #     · serial correlation   → Breusch-Godfrey (up to lag p) and Durbin-Watson (lag 1)
+    print("Running regression-residual diagnostics …")
+    REGDIAG_RES: dict = {}
+
+    for col in AVAILABLE:
+        s = DF[col].dropna().values
+        n = len(s)
+        trend = np.arange(n, dtype=float)
+        X   = sm.add_constant(trend)        # design matrix: [const, time-trend]
+        ols = sm.OLS(s, X).fit()
+        resid = ols.resid
+
+        # Durbin-Watson — first-order serial correlation (≈2 none, <2 positive, >2 negative)
+        dw = float(durbin_watson(resid))
+
+        # Breusch-Godfrey — serial correlation up to BG_LAGS (LM test)
+        try:
+            bg_lm, bg_lmp, bg_f, bg_fp = acorr_breusch_godfrey(ols, nlags=BG_LAGS)
         except Exception:
-            hqc_by_lag[p] = float("nan")
+            bg_lm = bg_lmp = bg_f = bg_fp = float("nan")
 
-    DIAG_RES[col] = dict(
-        # KS
-        ks_stat=float(ks_stat), ks_p=float(ks_p), ks_ok=bool(ks_p >= THRES),
-        mu=mu, sigma=sigma,
-        # SW
-        sw_stat=float(sw_stat), sw_p=float(sw_p), sw_ok=bool(sw_p >= THRES),
-        sw_n=int(len(sw_sample)),
-        # JB
-        jb_stat=float(jb_stat), jb_p=float(jb_p), jb_ok=bool(jb_p >= THRES),
-        skew=skew, kurt=kurt,
-        # LB
-        lb_stats=lb_stats, lb_pvals=lb_pvals,
-        lb_min_p=lb_min_p, lb_best_lag=lb_best_l,
-        lb_ok=bool(lb_min_p >= THRES),      # fail-to-reject → no autocorrelation
-        # HQC
-        hqc_by_lag=hqc_by_lag,
-        best_hqc_val=float(best_hqc_val),
-        best_hqc_lag=int(best_hqc_lag),
+        # Breusch-Pagan — heteroskedasticity of residuals w.r.t. the regressors (LM test)
+        try:
+            bp_lm, bp_lmp, bp_f, bp_fp = het_breuschpagan(resid, ols.model.exog)
+        except Exception:
+            bp_lm = bp_lmp = bp_f = bp_fp = float("nan")
+
+        REGDIAG_RES[col] = dict(
+            # Breusch-Pagan (H0: homoskedastic → fail-to-reject = "ok")
+            bp_stat=float(bp_lm), bp_p=float(bp_lmp),
+            bp_f=float(bp_f),     bp_fp=float(bp_fp),
+            bp_ok=bool(bp_lmp >= THRES),
+            # Breusch-Godfrey (H0: no serial correlation → fail-to-reject = "ok")
+            bg_stat=float(bg_lm), bg_p=float(bg_lmp),
+            bg_f=float(bg_f),     bg_fp=float(bg_fp),
+            bg_lags=int(BG_LAGS),
+            bg_ok=bool(bg_lmp >= THRES),
+            # Durbin-Watson (no p-value; ≈2 = no first-order serial correlation)
+            dw_stat=dw,
+            dw_ok=bool(1.5 <= dw <= 2.5),
+        )
+        print(f"  {LABELS.get(col, col):35s}  BP p={pf(bp_lmp)}  BG p={pf(bg_lmp)}  DW={dw:.3f}")
+
+    print("Regression-residual diagnostics done ✔")
+
+    return dict(
+        acf_stats=ACF_STATS, stat_res=STAT_RES, coint_res=COINT_RES,
+        johansen_res=JOHANSEN_RES, po_res=PO_RES, granger_res=GRANGER_RES,
+        diag_res=DIAG_RES, regdiag_res=REGDIAG_RES,
     )
-    print(f"  {LABELS.get(col, col):35s}  KS p={pf(ks_p)}  SW p={pf(sw_p)}  JB p={pf(jb_p)}  LB_min_p={pf(lb_min_p)}  HQC_lag={best_hqc_lag}")
 
-print("Diagnostics done ✔")
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  CACHED EXECUTION  —  hash the CSV file + every config knob the battery above
+#  depends on; on a match, load the previous run's results straight from disk
+#  instead of re-running ~20 variables through nine different statistical
+#  tests. Delete .cache/ (or touch spg.csv, or change NLAGS/THRES/pairs/...)
+#  to force a full recompute.
+# ─────────────────────────────────────────────────────────────────────────────
+_PRECOMPUTE_SIG = make_signature(
+    CSV_PATH, version="app-precompute-v1",
+    nlags=NLAGS, thres=THRES, max_lag_gc=MAX_LAG_GC,
+    lb_lags=LB_LAGS, hqc_max_lag=HQC_MAX_LAG, bg_lags=BG_LAGS,
+    coint_pairs=COINT_PAIRS, granger_pairs=GRANGER_PAIRS,
+    available=AVAILABLE,
+)
+_cached_precompute = load_cache("app_precompute", _PRECOMPUTE_SIG)
+if _cached_precompute is not None:
+    print("Loaded cached statistical test battery from .cache/ ✔  "
+          "(delete .cache/ to force a full recompute)")
+    _bundle = _cached_precompute
+else:
+    _bundle = _run_precompute()
+    save_cache("app_precompute", _PRECOMPUTE_SIG, _bundle)
+print("All tests ready ✔")
+
+ACF_STATS    = _bundle["acf_stats"]
+STAT_RES     = _bundle["stat_res"]
+COINT_RES    = _bundle["coint_res"]
+JOHANSEN_RES = _bundle["johansen_res"]
+PO_RES       = _bundle["po_res"]
+GRANGER_RES  = _bundle["granger_res"]
+DIAG_RES     = _bundle["diag_res"]
+REGDIAG_RES  = _bundle["regdiag_res"]
+
+n_stat      = sum(1 for c in AVAILABLE if STAT_RES[c]["adf_ok"] or STAT_RES[c]["pp_ok"])
+n_co        = sum(1 for v in COINT_RES.values()    if v["sig"])
+n_joh       = sum(1 for v in JOHANSEN_RES.values() if v["sig"])
+n_po        = sum(1 for v in PO_RES.values()       if v["sig"])
+n_gc        = sum(1 for v in GRANGER_RES.values()  if v["sig"])
 n_normal_ks = sum(1 for c in AVAILABLE if DIAG_RES[c]["ks_ok"])
 n_normal_sw = sum(1 for c in AVAILABLE if DIAG_RES[c]["sw_ok"])
 n_normal_jb = sum(1 for c in AVAILABLE if DIAG_RES[c]["jb_ok"])
 n_white_lb  = sum(1 for c in AVAILABLE if DIAG_RES[c]["lb_ok"])
-
-# ── Regression-residual diagnostics: Breusch-Pagan, Breusch-Godfrey, Durbin-Watson ──
-#   These three classical tests operate on the residuals of a regression, so for each
-#   variable we fit a simple model — a constant plus a linear time trend
-#   (y_t = α + β·t + e_t) — and test its residuals e_t for:
-#     · heteroskedasticity   → Breusch-Pagan
-#     · serial correlation   → Breusch-Godfrey (up to lag p) and Durbin-Watson (lag 1)
-print("Running regression-residual diagnostics …")
-REGDIAG_RES: dict = {}
-BG_LAGS = 12   # Breusch-Godfrey: test serial correlation up to this lag
-
-for col in AVAILABLE:
-    s = DF[col].dropna().values
-    n = len(s)
-    trend = np.arange(n, dtype=float)
-    X   = sm.add_constant(trend)        # design matrix: [const, time-trend]
-    ols = sm.OLS(s, X).fit()
-    resid = ols.resid
-
-    # Durbin-Watson — first-order serial correlation (≈2 none, <2 positive, >2 negative)
-    dw = float(durbin_watson(resid))
-
-    # Breusch-Godfrey — serial correlation up to BG_LAGS (LM test)
-    try:
-        bg_lm, bg_lmp, bg_f, bg_fp = acorr_breusch_godfrey(ols, nlags=BG_LAGS)
-    except Exception:
-        bg_lm = bg_lmp = bg_f = bg_fp = float("nan")
-
-    # Breusch-Pagan — heteroskedasticity of residuals w.r.t. the regressors (LM test)
-    try:
-        bp_lm, bp_lmp, bp_f, bp_fp = het_breuschpagan(resid, ols.model.exog)
-    except Exception:
-        bp_lm = bp_lmp = bp_f = bp_fp = float("nan")
-
-    REGDIAG_RES[col] = dict(
-        # Breusch-Pagan (H0: homoskedastic → fail-to-reject = "ok")
-        bp_stat=float(bp_lm), bp_p=float(bp_lmp),
-        bp_f=float(bp_f),     bp_fp=float(bp_fp),
-        bp_ok=bool(bp_lmp >= THRES),
-        # Breusch-Godfrey (H0: no serial correlation → fail-to-reject = "ok")
-        bg_stat=float(bg_lm), bg_p=float(bg_lmp),
-        bg_f=float(bg_f),     bg_fp=float(bg_fp),
-        bg_lags=int(BG_LAGS),
-        bg_ok=bool(bg_lmp >= THRES),
-        # Durbin-Watson (no p-value; ≈2 = no first-order serial correlation)
-        dw_stat=dw,
-        dw_ok=bool(1.5 <= dw <= 2.5),
-    )
-    print(f"  {LABELS.get(col, col):35s}  BP p={pf(bp_lmp)}  BG p={pf(bg_lmp)}  DW={dw:.3f}")
-
-print("Regression-residual diagnostics done ✔")
-
 n_homosk    = sum(1 for c in AVAILABLE if REGDIAG_RES[c]["bp_ok"])
 n_nocorr_bg = sum(1 for c in AVAILABLE if REGDIAG_RES[c]["bg_ok"])
 n_dw_ok     = sum(1 for c in AVAILABLE if REGDIAG_RES[c]["dw_ok"])
@@ -2614,6 +2662,7 @@ app = dash.Dash(
     suppress_callback_exceptions=True,
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
 )
+server = app.server  # exposes the underlying Flask app for `gunicorn app:server`
 
 app.index_string = f"""<!DOCTYPE html>
 <html>
@@ -2906,7 +2955,7 @@ app.layout = html.Div([
     ),
     dbc.Container(
         dbc.Tabs(
-            [tab_exploration, tab_stationarity, tab_cointegration, tab_causality, tab_diagnostics, tab_synth, tab_synth2, tab_map],
+            [tab_exploration, tab_stationarity, tab_cointegration, tab_causality, tab_diagnostics, tab_synth, tab_synth2, tab_rqa, tab_map],
             id="main-tabs",
             active_tab="tab-exploration",
             style={"borderBottom": f"1px solid {BORDER}", "fontFamily": FONT_MONO},
@@ -2923,6 +2972,7 @@ app.layout = html.Div([
 register_map_callbacks(app)
 register_synth_callbacks(app)
 register_synth2_callbacks(app)
+register_rqa_callbacks(app)
 
 @callback(
     Output("acf-pacf-plot", "figure"),

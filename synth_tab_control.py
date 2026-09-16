@@ -47,6 +47,8 @@ from scipy import stats as sp_stats
 from statsmodels.tsa.stattools import adfuller, acf, pacf
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
+from cache_utils import make_signature, load_cache, save_cache
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  DESIGN TOKENS  (kept in sync with app.py — do not edit independently)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -440,6 +442,16 @@ _MODEL_CACHE: dict = {}
 _STATUS_LOCK = threading.Lock()
 _STATUS = dict(current=None, done=0, total=len(AVAILABLE), finished=False, errors={})
 
+# This is by far the most expensive block in the whole app — a bounded AICc/
+# BIC stepwise SARIMA search (up to several minutes per variable) run for
+# every one of AVAILABLE. Cached to disk via cache_utils so a later run with
+# an unchanged spg.csv and N_VALIDATION loads every fitted model and the
+# whole SYNTHETIC_TENSOR straight from .cache/ instead of refitting.
+_MODEL_SIG = make_signature(
+    CSV_PATH, version="synth-sarima-v1",
+    n_validation=N_VALIDATION, available=AVAILABLE,
+)
+
 
 def _precompute_worker():
     """Fit every variable in a daemon thread so the Dash server starts serving
@@ -469,17 +481,33 @@ def _precompute_worker():
             print(f"[synth_tab]   ({i}/{len(queue)}) {col}: could not fit — {type(e).__name__}: {e}")
         with _STATUS_LOCK:
             _STATUS["done"] = i
+    print(f"[synth_tab] Ready OK — tensor built in {time.time() - t_start:.1f}s total")
+    # Save to disk *before* flipping `finished`, so a consumer that reacts to
+    # finished=True (or a process that exits right after) can never observe
+    # a "done" state whose cache write is still in flight — the SARIMA
+    # payload is large enough (each fitted model carries its full Kalman
+    # filter state) that the write itself takes real, observable time.
+    save_cache("synth_sarima_models", _MODEL_SIG,
+               dict(tensor=SYNTHETIC_TENSOR, models=dict(_MODEL_CACHE)))
     with _STATUS_LOCK:
         _STATUS["finished"] = True
         _STATUS["current"] = None
-    print(f"[synth_tab] Ready OK — tensor built in {time.time() - t_start:.1f}s total")
 
 
-print(f"[synth_tab] Starting background SARIMA precompute for {len(AVAILABLE)} variables "
-      f"(observations={N_OBS}, realizations={N_VALIDATION}) — the app serves immediately; "
-      "the Synthetic Data tab fills in as models finish.")
-_WORKER = threading.Thread(target=_precompute_worker, daemon=True, name="synth-precompute")
-_WORKER.start()
+_cached_models = load_cache("synth_sarima_models", _MODEL_SIG)
+if _cached_models is not None:
+    SYNTHETIC_TENSOR[...] = _cached_models["tensor"]
+    _MODEL_CACHE.update(_cached_models["models"])
+    with _STATUS_LOCK:
+        _STATUS.update(done=len(AVAILABLE), total=len(AVAILABLE), finished=True, current=None)
+    print(f"[synth_tab] Loaded cached SARIMA fits + synthetic tensor for {len(_MODEL_CACHE)} "
+          "variables from .cache/ ✔  (delete .cache/ to force a full recompute)")
+else:
+    print(f"[synth_tab] Starting background SARIMA precompute for {len(AVAILABLE)} variables "
+          f"(observations={N_OBS}, realizations={N_VALIDATION}) — the app serves immediately; "
+          "the Synthetic Data tab fills in as models finish.")
+    _WORKER = threading.Thread(target=_precompute_worker, daemon=True, name="synth-precompute")
+    _WORKER.start()
 
 
 def get_model(col: str):

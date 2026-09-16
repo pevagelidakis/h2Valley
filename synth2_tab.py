@@ -55,6 +55,8 @@ from scipy import stats as sp_stats
 from statsmodels.tsa.stattools import acf as sm_acf
 from statsmodels.tsa.ar_model import ar_select_order
 
+from cache_utils import make_signature, load_cache, save_cache
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  DESIGN TOKENS  (kept in sync with app.py — do not edit independently)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -299,10 +301,18 @@ def _identify(col: str) -> dict:
 #  EAGER PRECOMPUTE  —  identification for every variable in a daemon thread,
 #  same pattern as synth_tab.py.  Much faster than the SARIMA fits (seconds,
 #  not minutes): nothing here needs maximum likelihood except one AR-by-OLS.
+#  Also cached to disk via cache_utils: a later run with the same spg.csv and
+#  config loads every variable's identification straight from .cache/ instead
+#  of redoing even this lightweight background work.
 # ─────────────────────────────────────────────────────────────────────────────
 _ID_CACHE: dict = {}
 _STATUS_LOCK = threading.Lock()
 _STATUS = dict(current=None, done=0, total=len(AVAILABLE), finished=False, errors={})
+
+_ID_SIG = make_signature(
+    CSV_PATH, version="synth2-identification-v1",
+    ar_maxlag=AR_MAXLAG, boot_block_max=BOOT_BLOCK_MAX, available=AVAILABLE,
+)
 
 
 def _precompute_worker():
@@ -324,16 +334,27 @@ def _precompute_worker():
                   f"{type(e).__name__}: {e}")
         with _STATUS_LOCK:
             _STATUS["done"] = i
+    print(f"[synth2_tab] Ready OK — Class-2 identification done in {time.time() - t_start:.1f}s")
+    # Save before flipping `finished`, so finished=True always implies the
+    # cache write already landed on disk (see synth_tab_control.py for why).
+    save_cache("synth2_identification", _ID_SIG, dict(_ID_CACHE))
     with _STATUS_LOCK:
         _STATUS["finished"] = True
         _STATUS["current"] = None
-    print(f"[synth2_tab] Ready OK — Class-2 identification done in {time.time() - t_start:.1f}s")
 
 
-print(f"[synth2_tab] Starting background Class-2 identification for {len(AVAILABLE)} variables "
-      "(sorted samples, spectra, normal-score AR fits) — generation itself is on-demand and instant.")
-_WORKER = threading.Thread(target=_precompute_worker, daemon=True, name="synth2-precompute")
-_WORKER.start()
+_cached_ids = load_cache("synth2_identification", _ID_SIG)
+if _cached_ids is not None:
+    _ID_CACHE.update(_cached_ids)
+    with _STATUS_LOCK:
+        _STATUS.update(done=len(AVAILABLE), total=len(AVAILABLE), finished=True, current=None)
+    print(f"[synth2_tab] Loaded cached Class-2 identification for {len(_ID_CACHE)} variables "
+          "from .cache/ ✔  (delete .cache/ to force a full recompute)")
+else:
+    print(f"[synth2_tab] Starting background Class-2 identification for {len(AVAILABLE)} variables "
+          "(sorted samples, spectra, normal-score AR fits) — generation itself is on-demand and instant.")
+    _WORKER = threading.Thread(target=_precompute_worker, daemon=True, name="synth2-precompute")
+    _WORKER.start()
 
 
 def get_ident(col: str):

@@ -36,7 +36,7 @@ FONT_SANS = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif"
 # ─────────────────────────────────────────────────────────────────────────────
 #  SPREADSHEET PATH  — update to match your actual file
 # ─────────────────────────────────────────────────────────────────────────────
-XLSX_PATH = Path("Hydrogen_production_capacity_2024__Update_2025__0_0.xlsx")
+XLSX_PATH = Path("Hydrogen production capacity 2024 (Update 2025)_0_0.xlsx")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  STATUS → visual mapping
