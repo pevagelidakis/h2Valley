@@ -775,7 +775,8 @@ def identification_card(identA: dict, identB: dict, colA: str, colB: str):
                     "is mathematically well-defined; both sliders remain fully adjustable "
                     "to explore either side of that trade-off.",
                 ],
-                fig_identification(identA, colA),
+                dcc.Graph(figure=fig_identification(identA, colA),
+                          config={"displayModeBar": False}),
             ],
         ),
     ], className="theory-row")
