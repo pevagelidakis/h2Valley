@@ -1194,7 +1194,7 @@ def fig_diag_variable(col: str) -> go.Figure:
     fig = make_subplots(
         rows=2, cols=3,
         subplot_titles=[
-            "Histogram vs Normal", "Q-Q Plot", "Skewness & Kurtosis",
+            "Amplitude PDF: P(|X|>x) — GGD / t / Laplace", "Q-Q Plot", "Skewness & Kurtosis",
             "Ljung-Box p-values by lag", "HQC by AR order", "Test Summary",
         ],
         horizontal_spacing=0.10,
@@ -1205,25 +1205,68 @@ def fig_diag_variable(col: str) -> go.Figure:
         ],
     )
 
-    # ── (1,1) Histogram ───────────────────────────────────────────────────
-    counts, bin_edges = np.histogram(s, bins=60, density=True)
-    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-    fig.add_trace(go.Bar(
-        x=bin_centers, y=counts,
-        marker_color=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},0.55)",
-        marker_line=dict(width=0),
-        name="Histogram", showlegend=False,
-        hovertemplate="bin: %{x:.3f}<br>density: %{y:.4f}<extra></extra>",
-    ), row=1, col=1)
-    # Normal overlay
-    xn = np.linspace(s.min(), s.max(), 200)
-    yn = sp_stats.norm.pdf(xn, d["mu"], d["sigma"])
+    # ── (1,1) Amplitude Probability Density: P(|X − center| > x) ───────────
+    # APD (as used in EMI/vibration analysis): for each level x on the axis,
+    # the probability that the deviation of the variable exceeds x in
+    # absolute value — i.e. the survival function of |X − center|.
+    center = d["mu"]
+    amp    = np.abs(s - center)
+    amp_max = float(amp.max()) if amp.size and amp.max() > 0 else 1.0
+    xn     = np.linspace(0.0, amp_max, 300)
+
+    # Empirical APD — direct survival function of the data's own |deviation|
+    y_emp = np.array([np.mean(amp > x) for x in xn])
     fig.add_trace(go.Scatter(
-        x=xn, y=yn, mode="lines",
-        line=dict(color=AMBER, width=2, dash="dot"),
-        name="Normal PDF", showlegend=False,
-        hovertemplate="x: %{x:.3f}<br>N(μ,σ): %{y:.4f}<extra></extra>",
+        x=xn, y=np.clip(y_emp, 1e-6, None), mode="lines",
+        line=dict(width=0),
+        fill="tozeroy",
+        fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},0.35)",
+        name="Empirical APD", showlegend=True,
+        hovertemplate="x: %{x:.3f}<br>P(|X-c|>x): %{y:.4f}<extra></extra>",
     ), row=1, col=1)
+
+    # For a symmetric location-scale fit, P(|X-loc|>x) = 2 * SF(loc + x).
+    # Each fit is wrapped so a convergence failure on one distribution
+    # (rare, but possible on odd data) can't take down the whole panel.
+    try:
+        ggd_beta, ggd_loc, ggd_scale = sp_stats.gennorm.fit(s)
+        y_ggd = 2.0 * sp_stats.gennorm.sf(ggd_loc + xn, ggd_beta, ggd_loc, ggd_scale)
+        fig.add_trace(go.Scatter(
+            x=xn, y=np.clip(y_ggd, 1e-6, None), mode="lines",
+            line=dict(color=AMBER, width=2, dash="dot"),
+            name="GGD APD", showlegend=True,
+            hovertemplate=f"x: %{{x:.3f}}<br>GGD (β={ggd_beta:.2f}): %{{y:.4f}}<extra></extra>",
+        ), row=1, col=1)
+    except Exception:
+        pass
+
+    try:
+        t_df, t_loc, t_scale = sp_stats.t.fit(s)
+        y_t = 2.0 * sp_stats.t.sf(t_loc + xn, t_df, t_loc, t_scale)
+        fig.add_trace(go.Scatter(
+            x=xn, y=np.clip(y_t, 1e-6, None), mode="lines",
+            line=dict(color=ACCENT2, width=2, dash="dash"),
+            name="Student-t APD", showlegend=True,
+            hovertemplate=f"x: %{{x:.3f}}<br>t (ν={t_df:.2f}): %{{y:.4f}}<extra></extra>",
+        ), row=1, col=1)
+    except Exception:
+        pass
+
+    try:
+        lap_loc, lap_scale = sp_stats.laplace.fit(s)
+        y_lap = 2.0 * sp_stats.laplace.sf(lap_loc + xn, lap_loc, lap_scale)
+        fig.add_trace(go.Scatter(
+            x=xn, y=np.clip(y_lap, 1e-6, None), mode="lines",
+            line=dict(color=GREEN, width=2, dash="longdash"),
+            name="Laplace APD", showlegend=True,
+            hovertemplate="x: %{x:.3f}<br>Laplace: %{y:.4f}<extra></extra>",
+        ), row=1, col=1)
+    except Exception:
+        pass
+
+    fig.update_yaxes(type="log", title_text="P(|X-c| > x)", row=1, col=1)
+    fig.update_xaxes(title_text="x (amplitude level)", row=1, col=1)
+
 
     # ── (1,2) Q-Q plot ────────────────────────────────────────────────────
     qq = sp_stats.probplot(s, dist="norm")
@@ -1325,8 +1368,6 @@ def fig_diag_variable(col: str) -> go.Figure:
         fig.update_xaxes(**ax_kw, row=r, col=c)
         fig.update_yaxes(**ax_kw, row=r, col=c)
 
-    fig.update_xaxes(title=dict(text="Value", standoff=3),  row=1, col=1)
-    fig.update_yaxes(title=dict(text="Density", standoff=3), row=1, col=1)
     fig.update_xaxes(title=dict(text="Theoretical quantiles", standoff=3), row=1, col=2)
     fig.update_yaxes(title=dict(text="Sample quantiles", standoff=3), row=1, col=2)
     fig.update_xaxes(title=dict(text="Lag", standoff=3), row=2, col=1)
@@ -1335,11 +1376,18 @@ def fig_diag_variable(col: str) -> go.Figure:
     fig.update_yaxes(title=dict(text="HQC", standoff=3), row=2, col=2)
 
     grp, gc = GROUPS.get(col, ("", MUTED2))
+    base_layout = _layout(height=620, margin=dict(t=80, b=32, l=60, r=20))
+    base_layout["showlegend"] = True
     fig.update_layout(
-        **_layout(height=620, margin=dict(t=80, b=32, l=60, r=20)),
+        **base_layout,
         title=dict(
             text=f"<span style='color:{gc}'>[{grp}]</span>  <b>{LABELS.get(col, col)}</b>  ·  Diagnostic Panel",
             font=dict(size=14, color=TEXT), x=0.01,
+        ),
+        legend=dict(
+            x=0.265, y=1.0, xanchor="right", yanchor="top",
+            bgcolor="rgba(0,0,0,0)", bordercolor=BORDER, borderwidth=1,
+            font=dict(size=9, color=MUTED2, family=FONT_MONO),
         ),
     )
     # Style subplot titles
