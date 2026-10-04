@@ -9,7 +9,7 @@ from scipy.signal import lombscargle
 from scipy.spatial.distance import cdist
 
 
-# the 10 RQA measures reported per window: (key, label)
+# the RQA measures reported per window: (key, label)
 RQA_METRICS = [
   ("rr",    "Recurrence Rate RR"),
   ("det",   "Determinism DET"),
@@ -21,6 +21,7 @@ RQA_METRICS = [
   ("lam",   "Laminarity LAM"),
   ("tt",    "Trapping Time TT"),
   ("vmax",  "Longest vertical line Vmax"),
+  ("rte",   "Recurrence time entropy RTE"),
 ]
 
 _CDIST_METRIC = {"l1": "cityblock", "l2": "euclidean", "linf": "chebyshev"}
@@ -114,6 +115,39 @@ def vertical_lines(R):
   return ends - starts
 
 
+def white_vertical_lines(R):
+  # lengths of white vertical lines (runs of 0s down each column bounded by a
+  # recurrence point above AND below) = recurrence times of the trajectory
+  B = np.asarray(R) == 1
+  N = B.shape[0]
+  edges = np.diff(np.pad((~B).astype(np.int8), ((1, 1), (0, 0))), axis=0).T
+  starts = np.nonzero(edges == 1)[1]
+  ends = np.nonzero(edges == -1)[1]
+  keep = (starts > 0) & (ends < N)  # drop runs touching the top / bottom border
+  return (ends - starts)[keep]
+
+
+def line_distribution(lengths, min_len=1):
+  # normalised line-length histogram: lengths l >= min_len and P(l), sum P(l) = 1
+  lengths = np.asarray(lengths)
+  lengths = lengths[lengths >= min_len]
+  if lengths.size == 0:
+    return np.array([], dtype=int), np.array([])
+  counts = np.bincount(lengths)
+  l = np.nonzero(counts)[0]
+  l = l[l >= min_len]
+  return l, counts[l] / lengths.size
+
+
+def tau_recurrence_rate(R, tau_max, two_sided=False):
+  # tau-recurrence rate RR_tau = 1/(N - tau) * sum_i R_{i, i+tau}, tau = 1..tau_max
+  # (two_sided: tau = -tau_max..tau_max, for the asymmetric cross-RP)
+  R = np.asarray(R) == 1
+  tau_max = int(min(tau_max, min(R.shape) - 1))
+  taus = np.arange(-tau_max if two_sided else 1, tau_max + 1)
+  return taus, np.array([np.diagonal(R, offset=k).mean() for k in taus])
+
+
 def diagonal_hist(R, theiler=1):
   # histogram of diagonal line lengths: hist[l] = number of lines of length l
   return np.bincount(diagonal_lines(R, theiler), minlength=max(R.shape) + 1)
@@ -129,13 +163,24 @@ def vertical_hist(R):
 # ─────────────────────────────────────────────────────────────────────────────
 def rqa_measures(R, lmin=2, vmin=2, theiler=0):
   # all RQA measures of RQA_METRICS (rr, det, lam as fractions 0..1), plus the
-  # diagonal line lengths >= lmin and the number of recurrence points
+  # diagonal line lengths >= lmin, vertical line lengths >= vmin, white vertical
+  # line lengths (recurrence times) and the number of recurrence points
   Rm, n_cells = _theiler_mask(R, theiler)
   n_rec = int(Rm.sum())
+  empty = np.array([], dtype=int)
   out = dict(rr=0.0, det=0.0, ratio=0.0, L=0.0, Lmax=0, div=0.0, entr=0.0,
-             lam=0.0, tt=0.0, vmax=0, diag_lengths=np.array([], dtype=int), n_points=n_rec)
+             lam=0.0, tt=0.0, vmax=0, rte=0.0, diag_lengths=empty, vert_lengths=empty,
+             white_lengths=empty, n_points=n_rec)
   if n_cells == 0 or n_rec == 0:
     return out
+
+  # RTE: normalised Shannon entropy of the recurrence-time distribution, taken on
+  # the unmasked R (the Theiler band would otherwise create artificial gaps)
+  w = white_vertical_lines(R)
+  if w.size and w.max() > 1:
+    _, pw = line_distribution(w)
+    out["rte"] = float(abs(np.sum(pw * np.log(pw))) / np.log(w.max()))
+  out["white_lengths"] = w
 
   d = diagonal_lines(Rm, theiler)
   v = vertical_lines(Rm)
@@ -157,6 +202,7 @@ def rqa_measures(R, lmin=2, vmin=2, theiler=0):
     out["tt"] = float(v.mean())
     out["vmax"] = int(v.max())
   out["diag_lengths"] = d
+  out["vert_lengths"] = v
   return out
 
 

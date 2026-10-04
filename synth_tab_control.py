@@ -46,6 +46,7 @@ import dash_bootstrap_components as dbc
 from scipy import stats as sp_stats
 from statsmodels.tsa.stattools import adfuller, acf, pacf
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.statespace.initialization import Initialization
 
 from cache_utils import make_signature, load_cache, save_cache
 
@@ -243,6 +244,72 @@ def _try_fit(z, order, seasonal):
     return None, "failed"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  UNCONDITIONAL ("alternate-history") SIMULATION
+#  res.simulate(anchor=0) starts every path from the model's *estimation*
+#  initialisation. For a fit that needed the relaxed retry (enforce_stationarity
+#  =False) that is an approximate-diffuse prior with variance ~1e6, and for a
+#  d ≥ 1 model the integrated level is diffuse too: each path then begins
+#  ~10³ σ away from the data and, with seasonal AR roots near the unit circle,
+#  takes most of the record to forget it — a months-long burn-out transient
+#  (or, for the integrated level, a permanent offset).
+#  Instead each path starts from the model's own long-run distribution: the
+#  ARMA block from its exact stationary covariance, the integrated states at
+#  the observed starting level. Only if the fitted ARMA part is non-stationary
+#  (no stationary distribution exists) does it fall back to a burn-in long
+#  enough for the slowest mode to decay, which is then discarded.
+# ─────────────────────────────────────────────────────────────────────────────
+SIM_VERSION = "stationary-init-v1"   # bump to re-simulate cached fits without refitting
+BURN_TOL, BURN_MAX = 1e-3, 20_000    # fallback burn-in: decay slowest mode to BURN_TOL, capped
+
+
+def _simulation_model(res, z, stationary=True):
+    """A copy of the fitted SARIMAX re-initialised for unconditional simulation
+    (scale un-concentrated so the copy carries σ² explicitly)."""
+    old = res.model
+    mod = SARIMAX(z, order=old.order, seasonal_order=old.seasonal_order, trend=old.trend,
+                  enforce_stationarity=False, enforce_invertibility=False,
+                  concentrate_scale=False)
+    params = np.r_[np.asarray(res.params), float(res.scale)]
+    k, k_diff = mod.k_states, mod._k_states_diff
+    init = Initialization(k)
+    if k_diff:                                   # integrated states start at the observed level
+        init.set((0, k_diff), "known", constant=np.full(k_diff, z[0]))
+    init.set((k_diff, k), "stationary" if stationary else "known")
+    mod.ssm.initialization = init
+    return mod, params
+
+
+def _burn_in_length(res) -> int:
+    """Steps for the slowest AR mode to decay to BURN_TOL (fallback only)."""
+    roots = np.abs(np.r_[getattr(res, "arroots", [])])
+    rho = float(1.0 / roots.min()) if roots.size else 0.0
+    if rho <= 0.0:
+        return 0
+    if rho >= 1.0:
+        return BURN_MAX
+    return int(min(BURN_MAX, np.ceil(np.log(BURN_TOL) / np.log(rho))))
+
+
+def simulate_unconditional(res, z, n: int, reps: int, seed: int = 42):
+    """`reps` fresh n-step realisations (z-units) of the fitted process, each
+    started from the model's long-run distribution — no burn-out transient.
+    Returns (sims of shape (n, reps), method note, burn-in length used)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            mod, params = _simulation_model(res, z, stationary=True)
+            out = mod.simulate(params, nsimulations=n, repetitions=reps, anchor=0,
+                               random_state=seed)
+            return _squeeze(out), "stationary initial state", 0
+        except Exception:                        # non-stationary ARMA part: burn in instead
+            burn = _burn_in_length(res)
+            mod, params = _simulation_model(res, z, stationary=False)
+            out = mod.simulate(params, nsimulations=n + burn, repetitions=reps, anchor=0,
+                               random_state=seed)
+            return _squeeze(out)[burn:], f"burn-in of {burn} steps discarded", burn
+
+
 def _safe_acf(x, nlags):
     """ACF that never raises: constant / non-finite input -> NaN vector."""
     x = np.asarray(x, dtype=float)
@@ -388,10 +455,29 @@ def _fit_model(col: str) -> dict:
                     for r in fitted]
     aic_winner = min(fitted, key=lambda r: r["aicc"])
     bic_winner = bic_best
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        z_sims = _squeeze(res.simulate(nsimulations=n, repetitions=N_VALIDATION,
-                                       anchor=0, random_state=42))
+
+    m = dict(
+        col=col, y=y, idx=idx, n=n, mu_y=mu_y, sd_y=sd_y,
+        periods=periods, powers=powers, seasonal_period=seasonal_period,
+        adf_p=adf_p, d_order=d_order, n_skipped=n_skipped,
+        order_search=order_search,
+        best_order=selected["order"], best_seasonal=selected["seasonal"],
+        best_aic=selected["aic"], best_bic=selected["bic"], best_aicc=selected["aicc"],
+        aic_winner=(aic_winner["order"], aic_winner["seasonal"]),
+        bic_winner=(bic_winner["order"], bic_winner["seasonal"]),
+        res=res,
+    )
+    m.update(_validation_ensemble(m))
+    return m
+
+
+def _validation_ensemble(m: dict) -> dict:
+    """The N_VALIDATION alternate-history realisations of a fitted model and
+    their shape statistics (ACF/PACF, moments) against the real series.
+    Separate from fitting so cached fits can be re-simulated cheaply."""
+    y, n, mu_y, sd_y = m["y"], m["n"], m["mu_y"], m["sd_y"]
+    z = (y - mu_y) / sd_y
+    z_sims, sim_method, burn_in = simulate_unconditional(m["res"], z, n, N_VALIDATION, seed=42)
     z_sims = np.nan_to_num(z_sims, nan=0.0, posinf=0.0, neginf=0.0)
     valid_sims = z_sims * sd_y + mu_y            # back to physical units
     nlags_view = min(48, n // 4)
@@ -406,20 +492,10 @@ def _fit_model(col: str) -> dict:
     moments_sim  = dict(mean=float(np.mean(sim_pool)), std=float(np.std(sim_pool, ddof=1)),
                         skew=float(sp_stats.skew(sim_pool)), kurt=float(sp_stats.kurtosis(sim_pool)))
 
-    return dict(
-        col=col, y=y, idx=idx, n=n, mu_y=mu_y, sd_y=sd_y,
-        periods=periods, powers=powers, seasonal_period=seasonal_period,
-        adf_p=adf_p, d_order=d_order, n_skipped=n_skipped,
-        order_search=order_search,
-        best_order=selected["order"], best_seasonal=selected["seasonal"],
-        best_aic=selected["aic"], best_bic=selected["bic"], best_aicc=selected["aicc"],
-        aic_winner=(aic_winner["order"], aic_winner["seasonal"]),
-        bic_winner=(bic_winner["order"], bic_winner["seasonal"]),
-        res=res,
-        valid_sims=valid_sims, nlags_view=nlags_view,
-        acf_real=acf_real, pacf_real=pacf_real, acf_sim=acf_sim, pacf_sim=pacf_sim,
-        moments_real=moments_real, moments_sim=moments_sim,
-    )
+    return dict(valid_sims=valid_sims, nlags_view=nlags_view,
+                acf_real=acf_real, pacf_real=pacf_real, acf_sim=acf_sim, pacf_sim=pacf_sim,
+                moments_real=moments_real, moments_sim=moments_sim,
+                sim_method=sim_method, burn_in=burn_in)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -488,16 +564,36 @@ def _precompute_worker():
     # payload is large enough (each fitted model carries its full Kalman
     # filter state) that the write itself takes real, observable time.
     save_cache("synth_sarima_models", _MODEL_SIG,
-               dict(tensor=SYNTHETIC_TENSOR, models=dict(_MODEL_CACHE)))
+               dict(tensor=SYNTHETIC_TENSOR, models=dict(_MODEL_CACHE), sim_version=SIM_VERSION))
     with _STATUS_LOCK:
         _STATUS["finished"] = True
         _STATUS["current"] = None
+
+
+def _resimulate_cached():
+    """Rebuild every cached model's validation ensemble with the current
+    simulation method (fits are kept — no refit), refill the tensor, re-save."""
+    t0 = time.time()
+    for col, m in _MODEL_CACHE.items():
+        try:
+            m.update(_validation_ensemble(m))
+        except Exception as e:                       # keep the old ensemble rather than crash
+            print(f"[synth_tab]   {col}: re-simulation failed — {type(e).__name__}: {e}")
+            continue
+        if len(m["y"]) == N_OBS:
+            SYNTHETIC_TENSOR[:, FEATURE_INDEX[col], :] = m["valid_sims"]
+            m["valid_sims"] = SYNTHETIC_TENSOR[:, FEATURE_INDEX[col], :]
+    save_cache("synth_sarima_models", _MODEL_SIG,
+               dict(tensor=SYNTHETIC_TENSOR, models=dict(_MODEL_CACHE), sim_version=SIM_VERSION))
+    print(f"[synth_tab] Re-simulated cached fits with '{SIM_VERSION}' in {time.time() - t0:.1f}s")
 
 
 _cached_models = load_cache("synth_sarima_models", _MODEL_SIG)
 if _cached_models is not None:
     SYNTHETIC_TENSOR[...] = _cached_models["tensor"]
     _MODEL_CACHE.update(_cached_models["models"])
+    if _cached_models.get("sim_version") != SIM_VERSION:
+        _resimulate_cached()
     with _STATUS_LOCK:
         _STATUS.update(done=len(AVAILABLE), total=len(AVAILABLE), finished=True, current=None)
     print(f"[synth_tab] Loaded cached SARIMA fits + synthetic tensor for {len(_MODEL_CACHE)} "

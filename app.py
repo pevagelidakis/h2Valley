@@ -2572,6 +2572,14 @@ body, html {{
 }}
 .theory-card p {{ font-size: 12.5px; color: {MUTED2}; line-height: 1.8; margin-bottom: 8px; }}
 
+/* dcc.Markdown(mathjax=True) wrappers (rqa_tab._md): block keeps paragraph
+   spacing tight, inline flows inside list items / labels / table cells */
+.md-block > p:last-child {{ margin-bottom: 0; }}
+.md-inline, .md-inline > p {{ display: inline; margin: 0; }}
+.theory-intro {{ margin-bottom: 18px; }}
+.math.md-block {{ overflow-x: auto; overflow-y: hidden; font-size: 12px; }}
+.math.md-block > p {{ margin: 0; }}
+
 /* Wrap the theory grid itself in a bordered container */
 .theory-grid-wrap {{
   border: 1px solid {BORDER};
