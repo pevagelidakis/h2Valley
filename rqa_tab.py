@@ -168,6 +168,7 @@ SW_PERIOD_MIN_DEFAULT = 24                    # Lomb-Scargle search band (sample
 SW_STEP_DEFAULT       = 25                    # sliding-window step, % of the window length
 SW_MIN_EMBEDDED       = 30                    # min embedded points per window (window is raised to meet it)
 PCT_KEYS              = ("rr", "det", "lam")  # measures displayed in %
+TAU_RR_FRACTION       = 2                     # RR_τ lags run up to (embedded points) / this
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  DATA  (independent load, mirrors app.py's load_data())
@@ -583,16 +584,82 @@ def fig_rqa_bars(mA, mB, mC, mJ, colA, colB) -> go.Figure:
     return fig
 
 
-def fig_diagonal_hist(diag_lengths: np.ndarray) -> go.Figure:
+def _series_style(colA: str, colB: str):
+    """Names / colours of the four matrices, shared by every multi-matrix chart."""
+    names = [f"Auto · {LABELS.get(colA, colA)}", f"Auto · {LABELS.get(colB, colB)}", "Cross", "Joint"]
+    palette = [COLORS.get(colA, ACCENT2), COLORS.get(colB, ACCENT), ACCENT2, AMBER]
+    return names, palette
+
+
+def fig_line_histograms(mA, mB, mC, mJ, colA, colB) -> go.Figure:
+    """Normalised diagonal P(ℓ), ℓ ≥ ℓmin, and vertical P(v), v ≥ vmin, line-length
+    distributions of all four matrices on a log-probability axis: an exponential
+    tail P(ℓ) ∝ exp(−K₂·ℓ) appears as a straight line whose slope tracks K₂."""
+    names, palette = _series_style(colA, colB)
+    fig = make_subplots(rows=1, cols=2, horizontal_spacing=0.08, subplot_titles=(
+        f"Diagonal lines P(ℓ), ℓ ≥ {L_MIN}", f"Vertical lines P(v), v ≥ {V_MIN}"))
+    any_data = False
+    for name, color, m in zip(names, palette, (mA, mB, mC, mJ)):
+        for c, (key, min_len) in enumerate((("diag_lengths", L_MIN), ("vert_lengths", V_MIN)), start=1):
+            x, p = rqa_funs.line_distribution(m[key], min_len)
+            any_data |= bool(x.size)
+            fig.add_trace(go.Scatter(
+                x=x, y=p, mode="lines+markers", name=name, legendgroup=name, showlegend=(c == 1),
+                line=dict(color=color, width=1.4), marker=dict(size=4),
+                hovertemplate=("ℓ" if c == 1 else "v") + " = %{x}<br>P = %{y:.4f}<extra>" + name + "</extra>",
+            ), row=1, col=c)
+    if not any_data:
+        return _placeholder_fig("No diagonal or vertical lines at this threshold / window.", height=300)
+    fig.update_xaxes(row=1, col=1, **_AX, title_text="Diagonal line length ℓ")
+    fig.update_xaxes(row=1, col=2, **_AX, title_text="Vertical line length v")
+    fig.update_yaxes(**_AX, type="log", title_text="Probability")
+    fig.update_annotations(font=dict(size=11, color=MUTED2, family=FONT_MONO))
+    fig.update_layout(**_base_layout(height=340, showlegend=True,
+                                     legend=dict(orientation="h", y=1.18, x=0),
+                                     margin=dict(t=70, b=40, l=56, r=16)))
+    return fig
+
+
+def _recurrence_period(taus: np.ndarray, rr: np.ndarray):
+    """Lag of the highest RR_τ peak after RR_τ first stops decreasing — the
+    dominant recurrence period (None if RR_τ never turns back up)."""
+    pos = taus > 0
+    taus, rr = taus[pos], rr[pos]
+    if rr.size < 3:
+        return None
+    rising = np.nonzero(np.diff(rr) > 0)[0]
+    if not rising.size:
+        return None
+    start = rising[0]
+    return int(taus[start + int(np.argmax(rr[start:]))])
+
+
+def fig_tau_rr(rec: dict, colA: str, colB: str, tau_max: int) -> go.Figure:
+    """τ-recurrence rate RR_τ for the auto and joint RPs (τ = 1..τmax) and the
+    cross RP (τ = −τmax..τmax: a peak at τ > 0 means B revisits A's states τ
+    samples later). Dominant recurrence periods of A and B are marked."""
+    names, palette = _series_style(colA, colB)
     fig = go.Figure()
-    if diag_lengths.size:
-        fig.add_trace(go.Histogram(x=diag_lengths, marker_color=ACCENT2,
-                                    xbins=dict(size=1)))
-    else:
-        return _placeholder_fig("No diagonal lines at this threshold / window.", height=260)
-    fig.update_layout(**_base_layout(height=260, showlegend=False))
-    fig.update_xaxes(**_AX, title_text="Diagonal line length ℓ (cross-recurrence)")
-    fig.update_yaxes(**_AX, title_text="Count")
+    for name, color, key, two_sided in zip(names, palette, ("R_a", "R_b", "R_cross", "R_joint"),
+                                           (False, False, True, False)):
+        taus, rr = rqa_funs.tau_recurrence_rate(rec[key], tau_max, two_sided=two_sided)
+        fig.add_trace(go.Scatter(
+            x=taus, y=100.0 * rr, mode="lines", name=name,
+            line=dict(color=color, width=1.6, dash="dot" if key == "R_cross" else None),
+            hovertemplate="lag %{x} h<br>RR = %{y:.2f}%<extra>" + name + "</extra>",
+        ))
+        if key in ("R_a", "R_b"):
+            T = _recurrence_period(taus, rr)
+            if T is not None:
+                fig.add_vline(x=T, line=dict(color=color, width=1.2, dash="dash"),
+                              annotation_text=f"T ≈ {T} h", annotation_position="top",
+                              annotation_font=dict(size=10, color=color, family=FONT_MONO))
+    fig.add_vline(x=0, line=dict(color=ZERO_L, width=1))
+    fig.update_xaxes(**_AX, title_text="Lag τ (samples / hours) — not the embedding delay")
+    fig.update_yaxes(**_AX, title_text="RR_τ (%)", rangemode="tozero")
+    fig.update_layout(**_base_layout(height=340, showlegend=True,
+                                     legend=dict(orientation="h", y=1.14, x=0),
+                                     margin=dict(t=60, b=40, l=56, r=16)))
     return fig
 
 
@@ -646,7 +713,7 @@ _SW_UNITS = {"rr": " (%)", "det": " (%)", "lam": " (%)"}
 
 
 def fig_sliding_rqa(sw: dict, colA: str, colB: str, win_start: int, win_end: int) -> go.Figure:
-    """The 10 RQA measures per sliding window (x = window centre), one panel
+    """The RQA measures per sliding window (x = window centre), one panel
     each, with the same four series / palette as the RR-DET-LAM bar chart;
     the window currently inspected above is shaded."""
     names = {"A": f"Auto · {LABELS.get(colA, colA)}", "B": f"Auto · {LABELS.get(colB, colB)}",
@@ -692,6 +759,7 @@ _RQA_ROWS = [
     ("entr", r"Diagonal entropy $ENTR$ (nats)",             False),
     ("tt",   r"Trapping Time $TT$",                         False),
     ("vmax", r"Longest vertical line $V_{\max}$",           True),
+    ("rte",  r"Recurrence time entropy $RTE$",              False),
 ]
 
 
@@ -903,6 +971,19 @@ RQA_THEORY = html.Div([
                     r"one length (a clean periodicity), high when line lengths are richly "
                     r"varied. Trapping Time ($TT$), the mean vertical line length, is the "
                     r"laminar-phase counterpart of the same idea.",
+                    r"The full diagonal histogram $P(\ell)$, $\ell \geq \ell_{\min}$, carries more than "
+                    r"its mean $\langle L \rangle$: its tail decays as $P(\ell) \propto e^{-K_2 \ell}$, so "
+                    r"the slope of $\ln P(\ell)$ estimates the correlation entropy $K_2$, a lower bound on "
+                    r"the sum of the positive Lyapunov exponents. The vertical histogram $P(v)$ does the "
+                    r"same for laminar phases. The *white* vertical lines — gaps between successive "
+                    r"recurrences of one state — are recurrence times $T$; their normalised Shannon "
+                    r"entropy is the Recurrence Time Entropy ($RTE$, Little et al., 2007), near 0 for a "
+                    r"strictly periodic signal and near 1 for white noise.",
+                    r"Finally, the $\tau$-recurrence rate $RR_\tau$ is the density of the diagonal at "
+                    r"lag $\tau$ — the probability that the system is back near the state it occupied "
+                    r"$\tau$ samples earlier. It is the recurrence analogue of the autocorrelation "
+                    r"function: peaks at $\tau = 24, 168, \dots$ reveal daily or weekly cycles, but "
+                    r"unlike the ACF it responds to nonlinear as well as linear periodicity.",
                 ],
                 math_eq=r"RR = \frac{1}{N^2}\sum_{i,j=1}^{N} R_{ij}, \qquad "
                         r"DET = \frac{\sum_{\ell \geq \ell_{\min}} \ell\, P(\ell)}{\sum_{\ell \geq 1} \ell\, P(\ell)}, \qquad "
@@ -910,7 +991,11 @@ RQA_THEORY = html.Div([
                         r"$$ $$"
                         r"ENTR = -\sum_{\ell \geq \ell_{\min}} p(\ell) \ln p(\ell), \qquad "
                         r"TT = \frac{\sum_{v \geq v_{\min}} v\, P(v)}{\sum_{v \geq v_{\min}} P(v)}, \qquad "
-                        r"DIV = \frac{1}{L_{\max}}",
+                        r"DIV = \frac{1}{L_{\max}}"
+                        r"$$ $$"
+                        r"\langle L \rangle = \frac{\sum_{\ell \geq \ell_{\min}} \ell\, P(\ell)}{\sum_{\ell \geq \ell_{\min}} P(\ell)}, \qquad "
+                        r"RTE = -\frac{1}{\ln T_{\max}} \sum_{T=1}^{T_{\max}} p(T) \ln p(T), \qquad "
+                        r"RR_\tau = \frac{1}{N - \tau} \sum_{i=1}^{N-\tau} R_{i,\,i+\tau}",
             ),
         ], className="theory-row"),
         html.Div(id="rqa-id-card", className="theory-row"),
@@ -1079,7 +1164,12 @@ tab_rqa = dbc.Tab(
                          style={"flex": "1", "minWidth": "360px"}),
             ], style={"display": "flex", "gap": "16px", "alignItems": "stretch", "flexWrap": "wrap"}),
             _plot_card([dcc.Graph(id="rqa-hist", config={"displayModeBar": False})],
-                       label="Diagonal line length distribution · cross-recurrence"),
+                       label=_md(r"Line-length distributions $P(\ell)$ and $P(v)$ · all four matrices "
+                                 r"(log scale: slope of $\ln P(\ell)$ $\sim -K_2$)", inline=True)),
+            html.Div(id="rqa-taurr-desc", className="section-desc"),
+            _plot_card([dcc.Graph(id="rqa-taurr", config={"displaylogo": False})],
+                       label=_md(r"$\tau$-recurrence rate $RR_\tau$ · recurrence analogue of the ACF",
+                                 inline=True)),
         ]),
 
         _section_hdr("Sliding-Window RQA (window = Lomb-Scargle period)"),
@@ -1088,7 +1178,7 @@ tab_rqa = dbc.Tab(
             "Lomb-Scargle period — one full cycle per window, so every window sees the same phase "
             "coverage — slid forward by the chosen step. For each window the auto-, cross- and "
             r"joint-recurrence matrices are rebuilt with the shared $(m, \tau)$ and distance norm above, "
-            r"and the 10 RQA measures are recomputed. $\varepsilon$ is calibrated once on the whole record to "
+            rf"and all {len(RQA_METRICS)} RQA measures are recomputed. $\varepsilon$ is calibrated once on the whole record to "
             "the target recurrence rate and then held fixed, so $RR$ itself can change from window "
             "to window. The shaded band marks the window inspected in the plots above."
         ),
@@ -1115,7 +1205,7 @@ tab_rqa = dbc.Tab(
                        label="Lomb-Scargle periodogram · dominant period → window length"),
             html.Div(id="rqa-sw-desc", className="section-desc"),
             _plot_card([dcc.Graph(id="rqa-sw-fig", config={"displaylogo": False})],
-                       label="10 RQA measures per sliding window · auto / cross / joint"),
+                       label=f"{len(RQA_METRICS)} RQA measures per sliding window · auto / cross / joint"),
         ]),
 
         RQA_THEORY,
@@ -1149,6 +1239,8 @@ def register_rqa_callbacks(app):
         Output("rqa-table", "children"),
         Output("rqa-metrics-desc", "children"),
         Output("rqa-hist", "figure"),
+        Output("rqa-taurr", "figure"),
+        Output("rqa-taurr-desc", "children"),
         Output("rqa-id-card", "children"),
         Output("rqa-poll", "disabled"),
         Input("rqa-var-a", "value"),
@@ -1190,7 +1282,7 @@ def register_rqa_callbacks(app):
             msg = _md(r"Embedded trajectory has too few points (window length minus "
                       r"$(m-1)\tau$). Widen the window, or reduce the embedding dimension / delay.")
             return (_banner(("—", "Window too short", RED)), ph, ph, msg, ph, None, msg,
-                    ph, None, st["finished"])
+                    ph, ph, None, None, st["finished"])
 
         theiler = max(1, tau)
         mA = rqa_measures(rec["R_a"], theiler=theiler)
@@ -1229,7 +1321,25 @@ def register_rqa_callbacks(app):
             rf"near-diagonal points from the two auto-recurrence matrices and the joint-recurrence "
             r"matrix (the cross-recurrence matrix has no line-of-identity to exclude). Compare "
             r"Cross against the two Auto columns: comparable $DET$ / $LAM$ indicates the coupling "
-            r"is as structured as either system's own dynamics, not a diffuse, noise-level effect."
+            r"is as structured as either system's own dynamics, not a diffuse, noise-level effect. "
+            r"$RTE$ is the entropy of the recurrence-time (white vertical line) distribution, "
+            r"normalised to $[0, 1]$: near 0 for strictly periodic returns, near 1 for noise. "
+            r"Below, $P(\ell)$ and $P(v)$ are the normalised line-length histograms behind $DET$, "
+            r"$\langle L \rangle$, $ENTR$, $LAM$ and $TT$."
+        )
+
+        tau_max = max(1, rec["L"] // TAU_RR_FRACTION)
+        T_a = _recurrence_period(*rqa_funs.tau_recurrence_rate(rec["R_a"], tau_max))
+        T_b = _recurrence_period(*rqa_funs.tau_recurrence_rate(rec["R_b"], tau_max))
+        fmt_T = lambda T: f"$T \\approx {T}$ h" if T is not None else "no clear period"
+        taurr_desc = _md(
+            rf"$RR_\tau = \frac{{1}}{{N-\tau}}\sum_i R_{{i,i+\tau}}$ for lags $\tau = 1..{tau_max}$ "
+            rf"(half the {rec['L']:,} embedded points; here $\tau$ is a lag, not the embedding "
+            rf"delay). Peaks mark recurrence periods — the RQA analogue of ACF peaks, picking up "
+            rf"daily or weekly cycles without assuming linearity: {LABELS.get(colA, colA)} "
+            rf"{fmt_T(T_a)}, {LABELS.get(colB, colB)} {fmt_T(T_b)}. The dotted Cross curve "
+            rf"runs over $\tau = -{tau_max}..{tau_max}$: a peak at $\tau > 0$ means "
+            rf"{LABELS.get(colB, colB)} revisits {LABELS.get(colA, colA)}'s states $\tau$ samples later."
         )
 
         identA, identB = get_ident(colA), get_ident(colB)
@@ -1252,7 +1362,9 @@ def register_rqa_callbacks(app):
             fig_rqa_bars(mA, mB, mC, mJ, colA, colB),
             rqa_metric_table(mA, mB, mC, mJ, colA, colB),
             metrics_desc,
-            fig_diagonal_hist(mC["diag_lengths"]),
+            fig_line_histograms(mA, mB, mC, mJ, colA, colB),
+            fig_tau_rr(rec, colA, colB, tau_max),
+            taurr_desc,
             id_card,
             st["finished"],
         )
