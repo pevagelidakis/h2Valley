@@ -92,6 +92,8 @@ be revisited once real data is available.
 ├── synth_tab_control.py                                # Class-I synthetic data tab (SARIMA shape-matching)
 ├── synth2_tab.py                                       # Class-II synthetic data tab (IAAFT / bootstrap / copula)
 ├── rqa_tab.py                                          # Class-III recurrence quantification analysis (RQA) tab
+├── synth3_tab.py                                       # Class-III synthetic data tab (Twin Surrogates / GENDA)
+├── synth3_funs.py                                      # Class-III maths: twin surrogates, GENDA, dynamical invariants
 ├── spg.csv                                             # Hourly PV/meteorological series (proxy dataset)
 ├── Hydrogen_production_capacity_2024__Update_2025__0_0.xlsx   # IEA plant-by-plant capacity (drives the map)
 ├── Hydrogen_trade_2024.xlsx                            # IEA hydrogen-trade reference data (included; not yet wired in)
@@ -186,6 +188,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 # 2. install dependencies
 pip install dash dash-bootstrap-components plotly pandas numpy scipy statsmodels arch openpyxl
+pip install torch      # GENDA in Synthetic Data III (CPU build is enough; without it the tab runs Twin Surrogates only)
 ```
 
 Or pin them in a `requirements.txt`:
@@ -315,6 +318,20 @@ implemented, one tab each:
    LAM, L, Lmax, divergence, entropy, trapping time). It is the direct, computable
    counterpart to the chaos fingerprints (Lyapunov and Hurst exponents, CCM) referenced
    in the Causality tab's theory panel.
+4. **Dynamic fidelity, generative** (`synth3_tab.py` + `synth3_funs.py`, tab *Synthetic
+   Data III*) — synthetic series of any `spg.csv` column (PV target included) that
+   preserve the *dynamics*. The phase space is reconstructed with the same τ (AMI) and
+   m (FNN) estimators as the RQA tab, and two generators build new trajectories on it:
+   **Twin Surrogates** (Thiel et al., 2006), a random walk on the attractor that jumps
+   between states with the same recurrence neighbourhood (with a Jaccard tolerance δ,
+   since exact twins are almost absent in continuous data), and **GENDA**
+   (Troullinou et al., 2024), a generative neighbourhood-based deep autoencoder run as a
+   phase-space rollout. Validation compares re-identified (τ, m), Lyapunov exponent,
+   correlation dimension, sample/permutation entropy, DFA, time-reversal asymmetry, RQA
+   measures and spectral/ordinal/recurrence distances, each tolerance calibrated by the
+   real series' own split-half variability. GENDA training (~15 s per variable) runs once
+   in the background and is cached in `.cache/`. On Windows `app.py` imports `torch`
+   before pandas to avoid a DLL clash (WinError 1114).
 
 Validation throughout favours the same panel-of-evidence principle as the rest of the
 app: KS tests and Wasserstein distance for the statistical match, ACF/PACF overlays for
