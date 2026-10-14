@@ -1,4 +1,11 @@
 import warnings; warnings.filterwarnings("ignore")
+# PyTorch (GENDA, Synthetic Data III) must initialise its DLLs before pandas /
+# statsmodels load theirs, or Windows fails with WinError 1114. If torch is
+# missing the tab still works, with GENDA disabled.
+try:
+    import torch  # noqa: F401
+except Exception:
+    pass
 import math
 import numpy as np
 import pandas as pd
@@ -28,6 +35,7 @@ from map_tab import tab_map, register_map_callbacks
 from synth_tab_control import tab_synth, register_synth_callbacks
 from synth2_tab import tab_synth2, register_synth2_callbacks
 from rqa_tab import tab_rqa, register_rqa_callbacks
+from synth3_tab import tab_synth3, register_synth3_callbacks
 from cache_utils import make_signature, load_cache, save_cache
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2706,6 +2714,17 @@ ul.callout-list > li::before {{
 /* Override MathJax font color inside dark cards */
 .MathJax {{ color: {TEXT} !important; }}
 mjx-container {{ color: {TEXT} !important; }}
+/* Labels, plot labels and banner captions are uppercased by CSS; never let
+   that reach a formula (it would turn ε into E, δ into Δ, x_t into X_t) */
+label mjx-container, .plot-label mjx-container, .sbn-lbl mjx-container,
+.callout-lead mjx-container {{ text-transform: none !important; letter-spacing: normal !important; }}
+/* Synthetic Data III scoreboard tables */
+.s3-table th, .s3-table td {{ padding: 5px 10px; border-bottom: 1px solid {BORDER}; vertical-align: middle; }}
+.s3-table th {{ color: {MUTED2}; font-weight: 700; font-size: 11px; text-align: left; }}
+.s3-table td:first-child {{ white-space: normal; }}
+.s3-table td:not(:first-child) {{ white-space: nowrap; }}
+.s3-table tr.s3-group td {{ background: rgba(255,255,255,0.03); padding-top: 9px; font-size: 11px;
+  letter-spacing: .03em; border-bottom: 1px solid {BORDER}; }}
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3011,7 +3030,7 @@ app.layout = html.Div([
     ),
     dbc.Container(
         dbc.Tabs(
-            [tab_exploration, tab_stationarity, tab_cointegration, tab_causality, tab_diagnostics, tab_synth, tab_synth2, tab_rqa, tab_map],
+            [tab_exploration, tab_stationarity, tab_cointegration, tab_causality, tab_diagnostics, tab_synth, tab_synth2, tab_synth3, tab_rqa, tab_map],
             id="main-tabs",
             active_tab="tab-exploration",
             style={"borderBottom": f"1px solid {BORDER}", "fontFamily": FONT_MONO},
@@ -3029,6 +3048,7 @@ register_map_callbacks(app)
 register_synth_callbacks(app)
 register_synth2_callbacks(app)
 register_rqa_callbacks(app)
+register_synth3_callbacks(app)
 
 @callback(
     Output("acf-pacf-plot", "figure"),
