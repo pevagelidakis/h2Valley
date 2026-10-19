@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.git
+.venv
+try_it.ipynb
+app_control.py
+Dockerfile
+.dockerignore
+docker-compose.yml
+Caddyfile

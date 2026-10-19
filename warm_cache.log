@@ -1,0 +1,213 @@
+﻿python : C:\Users\panosevag\AppData\Roaming\Python\Python313\site-packages\statsmodels\base\model.py:607: 
+ConvergenceWarning: Maximum Likelihood optimization failed to converge. Check mle_retvals
+At line:1 char:381
++ ... topwatch]::StartNew(); python warm_cache.py *> warm_cache.log; "exit= ...
++                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\panose...eck mle_retvals:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  warnings.warn("Maximum Likelihood optimization failed to "
+[map_tab] Reading Hydrogen production capacity 2024 (Update 2025)_0_0.xlsx …
+[map_tab] 487 EU rows loaded from spreadsheet
+[synth_tab] Starting background SARIMA precompute for 20 variables (observations=4213, realizations=6) — the app serves immediately; the Synthetic Data tab fills in as models finish.
+[synth2_tab] Starting background Class-2 identification for 20 variables (sorted samples, spectra, normal-score AR fits) — generation itself is on-demand and instant.
+[rqa_tab] Starting background phase-space identification (AMI delay + FNN embedding dimension) for 20 variables — recurrence analysis itself does not wait on this and is interactive immediately.
+Initialising …
+Loading data …
+  20 columns, 4,213 rows
+Computing ACF/PACF …
+[rqa_tab]  (1/20) shortwave_radiation_backwards_sfc: tau=6  m=4  [0.2s]
+[rqa_tab]  (2/20) temperature_2_m_above_gnd: tau=7  m=4  [0.3s]
+[rqa_tab]  (3/20) relative_humidity_2_m_above_gnd: tau=7  m=4  [0.6s]
+[synth2_tab]  (1/20) temperature_2_m_above_gnd: block s=15  AR(p)=46  [1.6s]
+[rqa_tab]  (4/20) mean_sea_level_pressure_MSL: tau=11  m=1  [0.5s]
+[rqa_tab]  (5/20) total_precipitation_sfc: tau=12  m=1  [0.9s]
+Running stationarity tests …
+[rqa_tab]  (6/20) snowfall_amount_sfc: tau=3  m=1  [1.3s]
+[synth2_tab]  (2/20) relative_humidity_2_m_above_gnd: block s=15  AR(p)=45  [2.7s]
+[rqa_tab]  (7/20) total_cloud_cover_sfc: tau=10  m=2  [1.0s]
+[rqa_tab]  (8/20) high_cloud_cover_high_cld_lay: tau=14  m=2  [1.0s]
+[rqa_tab]  (9/20) medium_cloud_cover_mid_cld_lay: tau=10  m=2  [0.9s]
+[synth2_tab]  (3/20) mean_sea_level_pressure_MSL: block s=77  AR(p)=46  [3.1s]
+[rqa_tab]  (10/20) low_cloud_cover_low_cld_lay: tau=8  m=1  [0.9s]
+[rqa_tab]  (11/20) wind_speed_10_m_above_gnd: tau=11  m=4  [0.9s]
+[rqa_tab]  (12/20) wind_direction_10_m_above_gnd: tau=9  m=5  [0.6s]
+[rqa_tab]  (13/20) wind_speed_80_m_above_gnd: tau=18  m=5  [0.4s]
+[rqa_tab]  (14/20) wind_direction_80_m_above_gnd: tau=24  m=5  [0.7s]
+[synth2_tab]  (4/20) total_precipitation_sfc: block s=79  AR(p)=14  [3.0s]
+[rqa_tab]  (15/20) wind_speed_900_mb: tau=11  m=4  [0.9s]
+[rqa_tab]  (16/20) wind_direction_900_mb: tau=8  m=6  [0.9s]
+[rqa_tab]  (17/20) wind_gust_10_m_above_gnd: tau=12  m=4  [0.9s]
+[rqa_tab]  (18/20) angle_of_incidence: tau=4  m=7  [0.6s]
+[synth2_tab]  (5/20) snowfall_amount_sfc: block s=25  AR(p)=38  [3.1s]
+[rqa_tab]  (19/20) zenith: tau=6  m=5  [0.9s]
+[rqa_tab]  (20/20) azimuth: tau=7  m=7  [0.8s]
+[rqa_tab] Ready OK — phase-space identification done in 15.0s
+[cache_utils] saved 'rqa_identification' (0.0 MB, 0.0s)
+[synth2_tab]  (6/20) total_cloud_cover_sfc: block s=31  AR(p)=24  [3.0s]
+  Temperature (2 m)                    ADF p=0.0224
+[synth2_tab]  (7/20) high_cloud_cover_high_cld_lay: block s=75  AR(p)=11  [2.7s]
+[synth2_tab]  (8/20) medium_cloud_cover_mid_cld_lay: block s=75  AR(p)=35  [3.1s]
+[synth2_tab]  (9/20) low_cloud_cover_low_cld_lay: block s=83  AR(p)=16  [2.8s]
+[synth2_tab]  (10/20) shortwave_radiation_backwards_sfc: block s=15  AR(p)=46  [3.0s]
+[synth2_tab]  (11/20) wind_speed_10_m_above_gnd: block s=78  AR(p)=48  [3.3s]
+  Relative Humidity (2 m)              ADF p=< 0.0001
+[synth2_tab]  (12/20) wind_direction_10_m_above_gnd: block s=59  AR(p)=13  [2.5s]
+[synth2_tab]  (13/20) wind_speed_80_m_above_gnd: block s=78  AR(p)=16  [2.9s]
+[synth2_tab]  (14/20) wind_direction_80_m_above_gnd: block s=59  AR(p)=13  [2.9s]
+[synth2_tab]  (15/20) wind_speed_900_mb: block s=78  AR(p)=18  [3.0s]
+[synth2_tab]  (16/20) wind_direction_900_mb: block s=59  AR(p)=12  [2.8s]
+[synth2_tab]  (17/20) wind_gust_10_m_above_gnd: block s=78  AR(p)=38  [2.9s]
+  Sea-level Pressure                   ADF p=< 0.0001
+[synth2_tab]  (18/20) angle_of_incidence: block s=15  AR(p)=47  [3.1s]
+[synth2_tab]  (19/20) zenith: block s=15  AR(p)=47  [3.5s]
+[synth2_tab]  (20/20) azimuth: block s=15  AR(p)=45  [3.9s]
+[synth2_tab] Ready OK — Class-2 identification done in 59.1s
+[cache_utils] saved 'synth2_identification' (2.7 MB, 0.2s)
+  Total Precipitation                  ADF p=< 0.0001
+[synth_tab]   (1/20) temperature_2_m_above_gnd: SARIMA(3, 0, 2)x(1, 0, 1, 15)  AIC=2960.6  BIC=3017.6  [92.3s]
+  Snowfall                             ADF p=< 0.0001
+  Cloud Cover (total)                  ADF p=< 0.0001
+  Cloud Cover (high)                   ADF p=< 0.0001
+[synth_tab]   (2/20) relative_humidity_2_m_above_gnd: SARIMA(3, 0, 2)x(1, 0, 1, 15)  AIC=6038.1  BIC=6095.2  [63.4s]
+  Cloud Cover (medium)                 ADF p=< 0.0001
+  Cloud Cover (low)                    ADF p=< 0.0001
+[synth_tab]   (3/20) mean_sea_level_pressure_MSL: SARIMA(2, 0, 0)x(1, 0, 1, 15)  AIC=-1652.5  BIC=-1614.5  [58.2s]
+  Shortwave Radiation                  ADF p=0.0004
+  Wind Speed (10 m)                    ADF p=< 0.0001
+  Wind Direction (10 m)                ADF p=< 0.0001
+  Wind Speed (80 m)                    ADF p=< 0.0001
+  Wind Direction (80 m)                ADF p=< 0.0001
+[synth_tab]   (4/20) total_precipitation_sfc: SARIMA(1, 0, 2)x(0, 0, 0, 29)  AIC=9281.6  BIC=9313.4  [111.6s]
+  Wind Speed (900 mb)                  ADF p=< 0.0001
+  Wind Direction (900 mb)              ADF p=< 0.0001
+  Wind Gust (10 m)                     ADF p=< 0.0001
+[synth_tab]   (5/20) snowfall_amount_sfc: SARIMA(2, 0, 1)x(0, 0, 0, 25)  AIC=11554.6  BIC=11586.4  [76.7s]
+  Angle of Incidence                   ADF p=0.2359
+[synth_tab]   (6/20) total_cloud_cover_sfc: SARIMA(2, 0, 1)x(1, 0, 1, 14)  AIC=8387.9  BIC=8432.3  [39.6s]
+  Zenith Angle                         ADF p=0.5113
+  Azimuth                              ADF p=< 0.0001
+Running cointegration tests …
+  Shortwave Radiation ↔ Temperature (2 m)                  p=< 0.0001
+  Shortwave Radiation ↔ Relative Humidity (2 m)            p=< 0.0001
+  Temperature (2 m) ↔ Relative Humidity (2 m)              p=< 0.0001
+  Wind Speed (10 m) ↔ Wind Speed (80 m)                    p=< 0.0001
+  Wind Speed (80 m) ↔ Wind Speed (900 mb)                  p=< 0.0001
+  Wind Speed (10 m) ↔ Wind Gust (10 m)                     p=< 0.0001
+  Cloud Cover (total) ↔ Shortwave Radiation                p=< 0.0001
+  Cloud Cover (total) ↔ Temperature (2 m)                  p=< 0.0001
+  Zenith Angle ↔ Angle of Incidence                        p=0.9741
+  Zenith Angle ↔ Shortwave Radiation                       p=< 0.0001
+  Sea-level Pressure ↔ Wind Speed (10 m)                   p=< 0.0001
+  Cloud Cover (total) ↔ Cloud Cover (high)                 p=< 0.0001
+  Wind Direction (10 m) ↔ Wind Direction (80 m)            p=< 0.0001
+Running Johansen cointegration tests …
+  Shortwave Radiation ↔ Temperature (2 m)                  rank=2  trace0=1300.09 (crit=15.49)
+  Shortwave Radiation ↔ Relative Humidity (2 m)            rank=2  trace0=1419.16 (crit=15.49)
+  Temperature (2 m) ↔ Relative Humidity (2 m)              rank=2  trace0=676.15 (crit=15.49)
+  Wind Speed (10 m) ↔ Wind Speed (80 m)                    rank=2  trace0=1339.44 (crit=15.49)
+  Wind Speed (80 m) ↔ Wind Speed (900 mb)                  rank=2  trace0=1343.46 (crit=15.49)
+  Wind Speed (10 m) ↔ Wind Gust (10 m)                     rank=2  trace0=786.34 (crit=15.49)
+  Cloud Cover (total) ↔ Shortwave Radiation                rank=2  trace0=1514.29 (crit=15.49)
+  Cloud Cover (total) ↔ Temperature (2 m)                  rank=2  trace0=789.56 (crit=15.49)
+  Zenith Angle ↔ Angle of Incidence                        rank=2  trace0=1390.86 (crit=15.49)
+  Zenith Angle ↔ Shortwave Radiation                       rank=2  trace0=1918.51 (crit=15.49)
+  Sea-level Pressure ↔ Wind Speed (10 m)                   rank=2  trace0=298.00 (crit=15.49)
+  Cloud Cover (total) ↔ Cloud Cover (high)                 rank=2  trace0=993.57 (crit=15.49)
+  Wind Direction (10 m) ↔ Wind Direction (80 m)            rank=2  trace0=1573.30 (crit=15.49)
+Running Phillips-Ouliaris cointegration tests …
+[synth_tab]   (7/20) high_cloud_cover_high_cld_lay: SARIMA(2, 0, 2)x(0, 0, 0, 23)  AIC=8253.3  BIC=8291.3  [76.3s]
+  Shortwave Radiation ↔ Temperature (2 m)                  Zt=-19.9591  p=< 0.0001
+  Shortwave Radiation ↔ Relative Humidity (2 m)            Zt=-18.2005  p=< 0.0001
+  Temperature (2 m) ↔ Relative Humidity (2 m)              Zt=-10.0585  p=< 0.0001
+  Wind Speed (10 m) ↔ Wind Speed (80 m)                    Zt=-30.1439  p=< 0.0001
+  Wind Speed (80 m) ↔ Wind Speed (900 mb)                  Zt=-30.6259  p=< 0.0001
+  Wind Speed (10 m) ↔ Wind Gust (10 m)                     Zt=-24.8131  p=< 0.0001
+  Cloud Cover (total) ↔ Shortwave Radiation                Zt=-30.9531  p=< 0.0001
+  Cloud Cover (total) ↔ Temperature (2 m)                  Zt=-31.1835  p=< 0.0001
+  Zenith Angle ↔ Angle of Incidence                        Zt=-8.3295  p=< 0.0001
+  Zenith Angle ↔ Shortwave Radiation                       Zt=-38.5489  p=< 0.0001
+  Sea-level Pressure ↔ Wind Speed (10 m)                   Zt=-6.4201  p=< 0.0001
+  Cloud Cover (total) ↔ Cloud Cover (high)                 Zt=-35.1734  p=< 0.0001
+  Wind Direction (10 m) ↔ Wind Direction (80 m)            Zt=-42.5236  p=< 0.0001
+Running Granger causality tests …
+  Shortwave Radiation → Temperature (2 m)                       p=< 0.0001  lag=4
+  Shortwave Radiation → Relative Humidity (2 m)                 p=< 0.0001  lag=4
+  Shortwave Radiation → Cloud Cover (total)                     p=< 0.0001  lag=3
+  Temperature (2 m) → Relative Humidity (2 m)                   p=< 0.0001  lag=6
+  Wind Speed (10 m) → Wind Gust (10 m)                          p=< 0.0001  lag=4
+  Wind Speed (80 m) → Wind Gust (10 m)                          p=< 0.0001  lag=2
+  Cloud Cover (total) → Shortwave Radiation                     p=0.0004  lag=5
+  Zenith Angle → Shortwave Radiation                            p=< 0.0001  lag=2
+  Zenith Angle → Angle of Incidence                             p=< 0.0001  lag=6
+  Sea-level Pressure → Wind Speed (10 m)                        p=0.4892  lag=4
+  Temperature (2 m) → Shortwave Radiation                       p=< 0.0001  lag=4
+  Relative Humidity (2 m) → Total Precipitation                 p=0.5266  lag=3
+  Wind Speed (10 m) → Wind Speed (80 m)                         p=< 0.0001  lag=5
+  Angle of Incidence → Shortwave Radiation                      p=< 0.0001  lag=2
+All tests done ✔
+Running diagnostics tests …
+  Temperature (2 m)                    KS p=0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Relative Humidity (2 m)              KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Sea-level Pressure                   KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=11
+  Total Precipitation                  KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=5
+  Snowfall                             KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=1
+  Cloud Cover (total)                  KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Cloud Cover (high)                   KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Cloud Cover (medium)                 KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Cloud Cover (low)                    KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Shortwave Radiation                  KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Wind Speed (10 m)                    KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Wind Direction (10 m)                KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Wind Speed (80 m)                    KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Wind Direction (80 m)                KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Wind Speed (900 mb)                  KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Wind Direction (900 mb)              KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Wind Gust (10 m)                     KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Angle of Incidence                   KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Zenith Angle                         KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+  Azimuth                              KS p=< 0.0001  SW p=< 0.0001  JB p=< 0.0001  LB_min_p=< 0.0001  HQC_lag=12
+Diagnostics done ✔
+Running regression-residual diagnostics …
+  Temperature (2 m)                    BP p=< 0.0001  BG p=< 0.0001  DW=0.166
+  Relative Humidity (2 m)              BP p=0.0009  BG p=< 0.0001  DW=0.317
+  Sea-level Pressure                   BP p=< 0.0001  BG p=< 0.0001  DW=0.041
+  Total Precipitation                  BP p=0.0109  BG p=< 0.0001  DW=0.649
+  Snowfall                             BP p=0.0102  BG p=< 0.0001  DW=1.441
+  Cloud Cover (total)                  BP p=0.0008  BG p=< 0.0001  DW=0.507
+  Cloud Cover (high)                   BP p=0.0001  BG p=< 0.0001  DW=0.478
+  Cloud Cover (medium)                 BP p=0.0376  BG p=< 0.0001  DW=0.500
+  Cloud Cover (low)                    BP p=< 0.0001  BG p=< 0.0001  DW=0.573
+  Shortwave Radiation                  BP p=0.0098  BG p=< 0.0001  DW=0.308
+  Wind Speed (10 m)                    BP p=< 0.0001  BG p=< 0.0001  DW=0.184
+  Wind Direction (10 m)                BP p=< 0.0001  BG p=< 0.0001  DW=0.495
+  Wind Speed (80 m)                    BP p=< 0.0001  BG p=< 0.0001  DW=0.188
+  Wind Direction (80 m)                BP p=< 0.0001  BG p=< 0.0001  DW=0.453
+  Wind Speed (900 mb)                  BP p=< 0.0001  BG p=< 0.0001  DW=0.192
+  Wind Direction (900 mb)              BP p=< 0.0001  BG p=< 0.0001  DW=0.526
+  Wind Gust (10 m)                     BP p=< 0.0001  BG p=< 0.0001  DW=0.181
+  Angle of Incidence                   BP p=0.0013  BG p=< 0.0001  DW=0.308
+  Zenith Angle                         BP p=0.0001  BG p=< 0.0001  DW=0.275
+  Azimuth                              BP p=< 0.0001  BG p=< 0.0001  DW=0.666
+Regression-residual diagnostics done ✔
+[cache_utils] saved 'app_precompute' (0.0 MB, 0.0s)
+All tests ready ✔
+[synth_tab]   (8/20) medium_cloud_cover_mid_cld_lay: SARIMA(2, 0, 1)x(0, 0, 0, 22)  AIC=8431.1  BIC=8462.9  [68.3s]
+[synth_tab]   (9/20) low_cloud_cover_low_cld_lay: SARIMA(2, 0, 1)x(0, 0, 0, 14)  AIC=8763.8  BIC=8795.6  [46.8s]
+[synth_tab]   (10/20) shortwave_radiation_backwards_sfc: SARIMA(2, 0, 1)x(1, 0, 1, 15)  AIC=4496.0  BIC=4540.4  [31.8s]
+[synth_tab]   (11/20) wind_speed_10_m_above_gnd: SARIMA(2, 0, 0)x(0, 0, 0, 22)  AIC=4394.3  BIC=4419.7  [54.1s]
+[synth_tab]   (12/20) wind_direction_10_m_above_gnd: SARIMA(3, 0, 2)x(0, 0, 0, 14)  AIC=8410.2  BIC=8454.6  [58.4s]
+[synth_tab]   (13/20) wind_speed_80_m_above_gnd: SARIMA(1, 0, 1)x(0, 0, 0, 22)  AIC=4578.9  BIC=4604.3  [65.0s]
+[synth_tab]   (14/20) wind_direction_80_m_above_gnd: SARIMA(2, 0, 1)x(0, 0, 0, 26)  AIC=8080.8  BIC=8112.6  [74.4s]
+[synth_tab]   (15/20) wind_speed_900_mb: SARIMA(2, 0, 0)x(0, 0, 0, 22)  AIC=4628.9  BIC=4654.3  [46.7s]
+[synth_tab]   (16/20) wind_direction_900_mb: SARIMA(2, 0, 1)x(1, 0, 0, 14)  AIC=8614.2  BIC=8652.3  [37.7s]
+[synth_tab]   (17/20) wind_gust_10_m_above_gnd: SARIMA(1, 0, 0)x(0, 0, 0, 27)  AIC=4401.7  BIC=4420.7  [48.0s]
+[synth_tab]   (18/20) angle_of_incidence: SARIMA(3, 1, 1)x(0, 0, 1, 15)  AIC=3734.6  BIC=3779.0  [77.9s]
+[synth_tab]   (19/20) zenith: SARIMA(3, 1, 1)x(1, 0, 1, 15)  AIC=3542.1  BIC=3592.8  [61.4s]
+[synth_tab]   (20/20) azimuth: SARIMA(2, 0, 1)x(1, 0, 1, 15)  AIC=7858.1  BIC=7902.5  [34.4s]
+[synth_tab] Ready OK — tensor built in 1223.0s total
+[cache_utils] saved 'synth_sarima_models' (1905.6 MB, 2.1s)
+[warm_cache] synth_tab_control ready (669s elapsed)
+[warm_cache] synth2_tab ready (669s elapsed)
+[warm_cache] rqa_tab ready (669s elapsed)
+[warm_cache] all caches written ✔
