@@ -1503,13 +1503,18 @@ def register_synth3_callbacks(app):
         ens = ensemble(col, n_sims, seed, rr, delta, k)
         bundle = get_genda(col)
         tm = ens["tm"]
+        if bundle is not None:
+            gd_state, gd_c = "ready", GD_C
+        elif not TORCH_OK or col in st["gd_errors"]:
+            gd_state, gd_c = "unavailable", RED
+        else:
+            gd_state, gd_c = "training…", AMBER
         banner = _banner(
             (f"m = {ident['m']}", "Embedding dimension (FNN)", ACCENT2),
             (f"τ = {ident['tau']}", "Delay (AMI first minimum)", ACCENT2),
             (f"{100 * tm['frac_with_twin']:.0f}%", f"States with a twin (δ = {delta:.2f})", TS_C),
             (f"{ident['n']:,}", "Samples per realisation", MUTED2),
-            ("ready" if bundle is not None else "training…", "GENDA model",
-             GD_C if bundle is not None else AMBER),
+            (gd_state, "GENDA model", gd_c),
         )
         return (banner, fig_series(ident, ens), fig_portraits(ident, ens),
                 identification_card(ident, bundle, tm, delta))
