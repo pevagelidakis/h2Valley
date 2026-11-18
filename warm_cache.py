@@ -18,7 +18,7 @@ try:
 except Exception:
     pass
 
-import app_control_updated  # noqa: F401  — import side effects do the work
+import app  # noqa: F401  — import side effects do the work
 import rqa_tab
 import synth2_tab
 import synth3_tab

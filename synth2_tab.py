@@ -77,7 +77,7 @@ AMBER    = "#f5a623"
 SYN_C    = "#7eb3ff"
 FONT_MONO = "'IBM Plex Mono','Fira Code',monospace"
 
-CSV_PATH = Path("spg.csv")
+CSV_PATH = Path("data/spg.csv")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  VARIABLE CATALOGUE  (kept in sync with app.py — do not edit independently)

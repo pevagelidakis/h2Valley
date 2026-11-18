@@ -33,7 +33,6 @@ still simulates on demand from the same cached fitted model.
 
 from pathlib import Path
 from datetime import datetime
-import itertools
 import threading
 import time
 import warnings
@@ -70,7 +69,7 @@ AMBER    = "#f5a623"
 SYN_C    = "#7eb3ff"
 FONT_MONO = "'IBM Plex Mono','Fira Code',monospace"
 
-CSV_PATH = Path("spg.csv")
+CSV_PATH = Path("data/spg.csv")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  VARIABLE CATALOGUE  (kept in sync with app.py — do not edit independently)
@@ -619,13 +618,6 @@ def precompute_status() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 #  SIMULATION HELPERS  (respond to the dashboard controls)
 # ─────────────────────────────────────────────────────────────────────────────
-def synthetic_history(col: str, n_sims: int) -> np.ndarray:
-    """The first n_sims pre-computed realisations for `col`, read straight out
-    of SYNTHETIC_TENSOR — no simulation happens here, just an index lookup."""
-    idx = FEATURE_INDEX.get(col, FEATURE_INDEX[DEFAULT_COL])
-    n_sims = max(1, min(n_sims, N_VALIDATION))
-    return SYNTHETIC_TENSOR[:, idx, :n_sims]
-
 
 def simulate_future(m: dict, horizon: int, n_sims: int, seed: int) -> np.ndarray:
     """n_sims realisations continuing `horizon` steps past the last observation,

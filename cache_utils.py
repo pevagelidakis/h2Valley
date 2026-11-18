@@ -90,13 +90,3 @@ def save_cache(name: str, signature: str, payload: Any) -> None:
     tmp.replace(path)
     print(f"[cache_utils] saved '{name}' "
           f"({path.stat().st_size / 1e6:.1f} MB, {time.time() - t0:.1f}s)")
-
-
-def clear_cache(name: Optional[str] = None) -> None:
-    """Delete one named cache file, or every cache file if `name` is None."""
-    if name is None:
-        if CACHE_DIR.exists():
-            for f in CACHE_DIR.glob("*.pkl"):
-                f.unlink(missing_ok=True)
-        return
-    _path_for(name).unlink(missing_ok=True)

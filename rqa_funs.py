@@ -357,7 +357,7 @@ if __name__ == "__main__":
   import matplotlib.pyplot as plt
 
   n_points = 500  # full series (4213 points) makes the N x N matrix large
-  X = pd.read_csv("spg.csv")["temperature_2_m_above_gnd"].values#[:n_points]
+  X = pd.read_csv("data/spg.csv")["temperature_2_m_above_gnd"].values#[:n_points]
   print("Input time series:", X)
   m = 2
   tau = 1

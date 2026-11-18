@@ -89,7 +89,7 @@ TS_FILL  = "rgba(56,189,248,0.15)"
 GD_FILL  = "rgba(192,132,252,0.15)"
 METHOD_STYLE = {"ts": ("Twin Surrogates", TS_C, TS_FILL), "gd": ("GENDA", GD_C, GD_FILL)}
 
-CSV_PATH = Path("spg.csv")
+CSV_PATH = Path("data/spg.csv")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  VARIABLE CATALOGUE  —  every column of spg.csv, including the PV target

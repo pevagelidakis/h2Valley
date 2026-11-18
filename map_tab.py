@@ -36,7 +36,7 @@ FONT_SANS = "'IBM Plex Sans','Helvetica Neue',Arial,sans-serif"
 # ─────────────────────────────────────────────────────────────────────────────
 #  SPREADSHEET PATH  — update to match your actual file
 # ─────────────────────────────────────────────────────────────────────────────
-XLSX_PATH = Path("Hydrogen production capacity 2024 (Update 2025)_0_0.xlsx")
+XLSX_PATH = Path("data/Hydrogen production capacity 2024 (Update 2025)_0_0.xlsx")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  STATUS → visual mapping
@@ -493,7 +493,6 @@ def fig_country_pie(df: pd.DataFrame) -> go.Figure:
 
 def fig_status_timeline(df: pd.DataFrame) -> go.Figure:
     """Stacked bar: number of projects by start year and status."""
-    yr_col = df["_year"].replace("—", np.nan).dropna()
     sub = df[df["_year"] != "—"].copy()
     sub["_yr_num"] = pd.to_numeric(sub["_year"], errors="coerce")
     sub = sub.dropna(subset=["_yr_num"])

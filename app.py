@@ -23,7 +23,7 @@ from statsmodels.stats.stattools import durbin_watson
 import statsmodels.api as sm
 from statsmodels.tsa.ar_model import AutoReg
 from scipy import stats as sp_stats
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from arch.unitroot import PhillipsPerron
 import plotly.graph_objects as go
@@ -41,7 +41,7 @@ from cache_utils import make_signature, load_cache, save_cache
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
-CSV_PATH    = Path("spg.csv")
+CSV_PATH    = Path("data/spg.csv")
 NLAGS       = 48
 THRES       = 0.05
 MAX_LAG_GC  = 6
@@ -1576,9 +1576,6 @@ PLOTLY_CFG = dict(
 
 def section_hdr(text):
     return html.Div(text, className="section-hdr")
-
-def section_desc(text):
-    return html.Div(text, className="section-desc")
 
 def plot_card(children, label=None):
     inner = []
