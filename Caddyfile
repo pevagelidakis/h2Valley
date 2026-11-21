@@ -1,3 +1,5 @@
 {$SITE_ADDRESS::80} {
-	reverse_proxy app:8050
+	# Plotly figure JSON compresses ~5-10x; big win for remote/tunnel visitors.
+	encode zstd gzip
+	reverse_proxy app:7860
 }

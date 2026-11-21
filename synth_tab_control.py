@@ -40,7 +40,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 from scipy import stats as sp_stats
 from statsmodels.tsa.stattools import adfuller, acf, pacf
@@ -1138,6 +1138,7 @@ tab_synth = dbc.Tab(
 
         # Polls the background precompute; disables itself once all fits finish.
         dcc.Interval(id="synth-poll", interval=2000, n_intervals=0),
+        dcc.Store(id="synth-ready"),
 
         html.Div([
             html.Div([
@@ -1233,7 +1234,33 @@ def _progress_banner(col: str, st: dict):
     )
 
 
+def _ready_key(col: str, st: dict):
+    """Changes only when what the heavy callback would draw changes: while the
+    variable is pending it tracks progress (cheap placeholder redraws); once
+    ready it is a constant, so switching between ready variables or further
+    ticks never re-trigger the figures."""
+    if get_model(col) is not None:
+        return "ready"
+    return ["wait", st["done"], st["errors"].get(col)]
+
+
 def register_synth_callbacks(app):
+
+    # Light poller. The poll tick must never drive the figure callback directly:
+    # on a slow link a ~3 MB response outlives the 2 s tick, gets superseded by
+    # the next one, never lands, and the plots never appear.
+    @app.callback(
+        Output("synth-ready", "data"),
+        Output("synth-poll", "disabled"),
+        Input("synth-poll", "n_intervals"),
+        Input("synth-var", "value"),
+        State("synth-ready", "data"),
+    )
+    def _poll(_tick, col, prev):
+        col = col or DEFAULT_COL
+        st = precompute_status()
+        key = _ready_key(col, st)
+        return (key if key != prev else no_update), key == "ready" or st["finished"]
 
     @app.callback(
         Output("synth-banner", "children"),
@@ -1246,14 +1273,13 @@ def register_synth_callbacks(app):
         Output("synth-id-card", "children"),
         Output("synth-overlay", "figure"),
         Output("synth-mode-note", "children"),
-        Output("synth-poll", "disabled"),
         Input("synth-var", "value"),
         Input("synth-n-sims", "value"),
         Input("synth-horizon", "value"),
         Input("synth-seed", "value"),
-        Input("synth-poll", "n_intervals"),
+        Input("synth-ready", "data"),
     )
-    def update_synth(col, n_sims, horizon, seed, _tick):
+    def update_synth(col, n_sims, horizon, seed, _ready):
         col = col or DEFAULT_COL
         st = precompute_status()
         m = get_model(col)
@@ -1271,7 +1297,7 @@ def register_synth_callbacks(app):
             ph = _placeholder_fig(wait_msg)
             return (_progress_banner(col, st), ph, ph, ph, ph,
                     None, wait_msg, None, _placeholder_fig(wait_msg),
-                    wait_msg, st["finished"])
+                    wait_msg)
 
         n_sims = int(n_sims or 1)
         horizon = int(horizon or 0)
@@ -1298,5 +1324,4 @@ def register_synth_callbacks(app):
             identification_card(m),
             overlay_fig,
             mode_note,
-            st["finished"],           # stop polling once every variable is fitted
         )

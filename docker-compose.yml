@@ -8,6 +8,8 @@ services:
     restart: unless-stopped
     expose:
       - "7860"
+    volumes:
+      - app_cache:/home/app/h2valley/.cache   # keeps precompute results across restarts
 
   caddy:
     image: caddy:2
@@ -23,5 +25,19 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
 
+  # Public HTTPS link without router/port-forwarding setup (Cloudflare quick tunnel).
+  # The URL (https://<random>.trycloudflare.com) changes on every restart; find it with:
+  #   docker compose logs tunnel | Select-String trycloudflare
+  # Disable by running only the other services:  docker compose up -d app caddy
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - caddy
+    # http2 (TCP) instead of the default QUIC (UDP): many home routers/ISPs throttle
+    # UDP, which made the tunnel crawl at a few KB/s.
+    command: tunnel --no-autoupdate --protocol http2 --url http://caddy:80
+
 volumes:
   caddy_data:
+  app_cache:

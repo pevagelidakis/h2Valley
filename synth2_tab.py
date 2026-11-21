@@ -49,7 +49,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 from scipy import stats as sp_stats
 from statsmodels.tsa.stattools import acf as sm_acf
@@ -922,6 +922,7 @@ tab_synth2 = dbc.Tab(
 
         # Polls the background identification; disables itself once finished.
         dcc.Interval(id="s2-poll", interval=1500, n_intervals=0),
+        dcc.Store(id="s2-ready"),
 
         html.Div([
             html.Div([
@@ -1028,7 +1029,30 @@ def _progress_banner(col: str, st: dict):
     )
 
 
+def _ready_key(col: str, st: dict):
+    """Constant once `col` is identified; tracks progress while it is pending."""
+    if get_ident(col) is not None:
+        return "ready"
+    return ["wait", st["done"], st["errors"].get(col)]
+
+
 def register_synth2_callbacks(app):
+
+    # Light poller — the tick never drives the figure callback directly (see
+    # synth_tab_control._poll: on a slow link the big response would be
+    # superseded by the next tick and never land).
+    @app.callback(
+        Output("s2-ready", "data"),
+        Output("s2-poll", "disabled"),
+        Input("s2-poll", "n_intervals"),
+        Input("s2-var", "value"),
+        State("s2-ready", "data"),
+    )
+    def _poll(_tick, col, prev):
+        col = col or DEFAULT_COL
+        st = precompute_status()
+        key = _ready_key(col, st)
+        return (key if key != prev else no_update), key == "ready" or st["finished"]
 
     @app.callback(
         Output("s2-block", "value"),
@@ -1052,15 +1076,14 @@ def register_synth2_callbacks(app):
         Output("s2-hist", "figure"),
         Output("s2-acf", "figure"),
         Output("s2-id-card", "children"),
-        Output("s2-poll", "disabled"),
         Input("s2-var", "value"),
         Input("s2-method", "value"),
         Input("s2-n-sims", "value"),
         Input("s2-block", "value"),
         Input("s2-seed", "value"),
-        Input("s2-poll", "n_intervals"),
+        Input("s2-ready", "data"),
     )
-    def update_synth2(col, method, n_sims, block_len, seed, _tick):
+    def update_synth2(col, method, n_sims, block_len, seed, _ready):
         col = col or DEFAULT_COL
         method = method if method in METHODS else DEFAULT_METHOD
         st = precompute_status()
@@ -1076,7 +1099,7 @@ def register_synth2_callbacks(app):
                             "appear automatically when ready.")
             ph = _placeholder_fig(wait_msg)
             return (_progress_banner(col, st), ph, wait_msg, wait_msg, ph,
-                    None, ph, ph, ph, None, st["finished"])
+                    None, ph, ph, ph, None)
 
         n_sims = int(n_sims or 1)
         try:
@@ -1110,5 +1133,4 @@ def register_synth2_callbacks(app):
             fig_hist_compare(ident, sims),
             fig_acf_compare(ident, sims),
             identification_card(ident),
-            st["finished"],
         )

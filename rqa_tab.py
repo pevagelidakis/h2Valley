@@ -50,7 +50,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 from scipy.spatial import cKDTree
 
@@ -1081,6 +1081,7 @@ tab_rqa = dbc.Tab(
         ),
 
         dcc.Interval(id="rqa-poll", interval=1500, n_intervals=0),
+        dcc.Store(id="rqa-ready"),
 
         html.Div([
             html.Div([
@@ -1230,6 +1231,26 @@ def register_rqa_callbacks(app):
         ident = get_ident(colA or DEFAULT_COL_A)
         return (ident["m"], ident["tau"]) if ident else (3, 6)
 
+    # Light poller — only the identification card depends on background work.
+    # The tick never drives the (expensive, multi-MB) recurrence callback
+    # directly; see synth_tab_control._poll for why.
+    @app.callback(
+        Output("rqa-ready", "data"),
+        Output("rqa-poll", "disabled"),
+        Input("rqa-poll", "n_intervals"),
+        Input("rqa-var-a", "value"),
+        Input("rqa-var-b", "value"),
+        State("rqa-ready", "data"),
+    )
+    def _poll(_tick, colA, colB, prev):
+        colA = colA or DEFAULT_COL_A
+        colB = colB or DEFAULT_COL_B
+        if colB == colA:
+            colB = next((c for c in AVAILABLE if c != colA), colA)
+        st = precompute_status()
+        key = "ready" if (get_ident(colA) and get_ident(colB)) else ["wait", st["done"]]
+        return (key if key != prev else no_update), key == "ready" or st["finished"]
+
     @app.callback(
         Output("rqa-banner", "children"),
         Output("rqa-urp", "figure"),
@@ -1242,7 +1263,6 @@ def register_rqa_callbacks(app):
         Output("rqa-taurr", "figure"),
         Output("rqa-taurr-desc", "children"),
         Output("rqa-id-card", "children"),
-        Output("rqa-poll", "disabled"),
         Input("rqa-var-a", "value"),
         Input("rqa-var-b", "value"),
         Input("rqa-m", "value"),
@@ -1251,9 +1271,9 @@ def register_rqa_callbacks(app):
         Input("rqa-win-len", "value"),
         Input("rqa-win-start", "value"),
         Input("rqa-metric", "value"),
-        Input("rqa-poll", "n_intervals"),
+        Input("rqa-ready", "data"),
     )
-    def update_rqa(colA, colB, m, tau, target_rr, win_len, win_start, metric, _tick):
+    def update_rqa(colA, colB, m, tau, target_rr, win_len, win_start, metric, _ready):
         colA = colA or DEFAULT_COL_A
         colB = colB or DEFAULT_COL_B
         if colB == colA:
@@ -1282,7 +1302,7 @@ def register_rqa_callbacks(app):
             msg = _md(r"Embedded trajectory has too few points (window length minus "
                       r"$(m-1)\tau$). Widen the window, or reduce the embedding dimension / delay.")
             return (_banner(("—", "Window too short", RED)), ph, ph, msg, ph, None, msg,
-                    ph, ph, None, None, st["finished"])
+                    ph, ph, None, None)
 
         theiler = max(1, tau)
         mA = rqa_measures(rec["R_a"], theiler=theiler)
@@ -1366,7 +1386,6 @@ def register_rqa_callbacks(app):
             fig_tau_rr(rec, colA, colB, tau_max),
             taurr_desc,
             id_card,
-            st["finished"],
         )
 
     @app.callback(
