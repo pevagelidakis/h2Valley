@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "PowerShell($s = \"C:\\\\Users\\\\PANOSE~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-panosevag-Desktop-h2Valley\\\\9890c95f-26e1-44b5-b502-821e43b8808f\\\\scratchpad\\\\mem\"; Set-Location $s; python probe.py > probe.out 2> probe.err; \"exit=$LASTEXITCODE\"; Get-Content probe.out | Select-Object -Last 8; Get-Content probe.err | Where-Object { $_ -notmatch 'Warning|warn' } | Select-Object -Last 8)"
-    ]
-  }
-}
