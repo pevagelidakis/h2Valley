@@ -21,8 +21,9 @@ result under that signature in `.cache/` next to this file.
 The signature folds in each source file's (path, size, mtime) so editing
 spg.csv invalidates the cache automatically, and an explicit `version` tag
 so a caller can bust its own cache on a logic change without touching disk
-by hand. Delete the whole `.cache/` directory at any time to force every
-module to recompute from scratch.
+by hand. Results are stored per dataset (.cache/<dataset id>/), so several
+datasets can be analysed side by side. Delete `.cache/` (or one dataset's
+folder) at any time to force a recompute from scratch.
 """
 from __future__ import annotations
 
@@ -57,14 +58,18 @@ def make_signature(*source_files, version: str = "v1", **config) -> str:
 
 
 def _path_for(name: str) -> Path:
+    """Each dataset gets its own folder (.cache/<dataset id>/), so switching
+    H2V_DATASET never overwrites another dataset's results."""
+    from core.dataset import get_dataset
+    return CACHE_DIR / get_dataset().id / f"{name}.pkl"
+
+
+def _legacy_path_for(name: str) -> Path:
+    """Where caches lived before they were split per dataset (.cache/<name>.pkl)."""
     return CACHE_DIR / f"{name}.pkl"
 
 
-def load_cache(name: str, signature: str) -> Optional[Any]:
-    """Return the payload stored under `name` if its saved signature matches
-    `signature`; otherwise None (missing, unreadable, or stale — caller
-    should recompute)."""
-    path = _path_for(name)
+def _read(path: Path, signature: str) -> Optional[Any]:
     if not path.exists():
         return None
     try:
@@ -77,12 +82,30 @@ def load_cache(name: str, signature: str) -> Optional[Any]:
     return payload
 
 
+def load_cache(name: str, signature: str) -> Optional[Any]:
+    """Return the payload stored under `name` if its saved signature matches
+    `signature`; otherwise None (missing, unreadable, or stale — caller
+    should recompute). A matching cache in the old flat layout is moved into
+    the dataset's folder, so existing results are reused, not recomputed."""
+    path = _path_for(name)
+    payload = _read(path, signature)
+    if payload is not None:
+        return payload
+    legacy = _legacy_path_for(name)
+    payload = _read(legacy, signature)
+    if payload is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        legacy.replace(path)
+        print(f"[cache_utils] moved '{name}' into {path.parent.name}/")
+    return payload
+
+
 def save_cache(name: str, signature: str, payload: Any) -> None:
     """Persist `payload` under `name`, tagged with `signature`. Writes to a
     temp file and renames atomically, so a crash mid-write can never leave
     behind a corrupt file that a later run mistakes for a valid cache."""
-    CACHE_DIR.mkdir(exist_ok=True)
     path = _path_for(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     t0 = time.time()
     with open(tmp, "wb") as fh:

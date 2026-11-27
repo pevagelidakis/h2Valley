@@ -384,7 +384,7 @@ GROUP_NOTE = {
 #   kind "rel"  invariant, param = floor of |real| tol = max(0.1·max(|real|, floor), spread)
 #   kind "dist" distance to real, param = threshold  tol = max(threshold, ½-vs-½ baseline)
 SCORE_ROWS = [
-    (G_LIN,  "acf_rmse",   r"ACF RMSE, lags $1$–$48$",                         "ACF",    "dist", 0.05),
+    (G_LIN,  "acf_rmse",   rf"ACF RMSE, lags $1$–${S3.ACF_LAGS}$",               "ACF",    "dist", 0.05),
     (G_LIN,  "lsd",        r"Log-spectral distance (dB)",                      "PSD",    "dist", 2.0),
     (G_LIN,  "dfa",        r"DFA exponent $\alpha$",                           "DFA α",  "rel",  1e-3),
     (G_MARG, "ks",         r"Kolmogorov–Smirnov $D$",                          "KS",     "dist", 0.05),

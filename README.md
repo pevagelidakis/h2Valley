@@ -626,10 +626,11 @@ volume across, or let it compute once.
 | Default variables in the UI | `defaults:` in the config | temperature; RQA pair shortwave ↔ temperature |
 | Map dataset | `XLSX_PATH` in `map_tab.py` | IEA capacity workbook in `data/` |
 | Map country filter | `EU_COUNTRIES` in `map_tab.py` | European countries |
-| ACF/PACF lags | `NLAGS` in `app.py` | 48 |
+| Dominant cycle (all lags scale with it) | `time.period` in the config (samples; omit for auto-detect) | 24 for `spg.csv` |
+| ACF/PACF lags | `NLAGS = DS.lag(2)` in `app.py` | 2 cycles = 48 |
 | Significance level | `THRES` in `app.py` | 0.05 |
-| Granger max lag | `MAX_LAG_GC` in `app.py` | 6 |
-| Ljung–Box lags / HQC max lag / BG lags | `LB_LAGS`, `HQC_MAX_LAG`, `BG_LAGS` | [6, 12, 24] / 12 / 12 |
+| Granger max lag | `MAX_LAG_GC` in `app.py` | ¼ cycle = 6 |
+| Ljung–Box lags / HQC max lag / BG lags | `LB_LAGS`, `HQC_MAX_LAG`, `BG_LAGS` | ¼, ½, 1 cycle = [6, 12, 24] / 12 / 12 |
 | SARIMA realisations | `N_VALIDATION` in `synth_tab_control.py` | 6 |
 | SARIMA search budget | `SEARCH_BUDGET_S` in `synth_tab_control.py` | 240 s per variable |
 | RQA window / target RR | `WINDOW_DEFAULT`, `RR_DEFAULT` in `rqa_tab.py` | 300 h / 10% |
@@ -645,8 +646,14 @@ the next start recomputes them.
 **Analysing another file.** Copy `configs/spg.yaml`, set `path`, `time.column` /
 `time.freq` and `target`, and drop the `notes:` (they describe the proxy data only). Then
 start with `H2V_DATASET=configs/<name>.yaml` (PowerShell: `$env:H2V_DATASET="configs/<name>.yaml"`),
-or set it under `environment:` for the `app` service in `docker-compose.yml`. Lag settings
-(`NLAGS`, `LB_LAGS`, ...) still assume hourly data.
+or set it under `environment:` for the `app` service in `docker-compose.yml`.
+
+Every lag, window and horizon is a multiple of the dataset's dominant cycle (`time.period`,
+in samples): ACF to 2 cycles, Ljung–Box at ¼/½/1 cycle, bootstrap blocks up to 4 cycles,
+embedding delay up to 1 cycle, and so on. Axis units ("hours", "days", "samples") follow
+the data's frequency. The interpretation next to each ACF/PACF is generated from that
+dataset's own results; `notes:` in the config are shown underneath as analyst notes.
+Each dataset caches its results in its own folder, `.cache/<id>/`.
 
 ---
 

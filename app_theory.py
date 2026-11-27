@@ -36,19 +36,26 @@ from rqa_tab import tab_rqa, register_rqa_callbacks
 from synth3_tab import tab_synth3, register_synth3_callbacks
 from cache_utils import make_signature, load_cache, save_cache
 from core.dataset import get_dataset
+from core.insights import describe_series
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 DS          = get_dataset()   # active dataset: $H2V_DATASET or configs/spg.yaml
 CSV_PATH    = DS.path
-NLAGS       = 48
+# Every lag below is a multiple of the dataset's dominant cycle PERIOD (in
+# samples, from the config or detected). For hourly data with a daily cycle
+# (PERIOD = 24) they are the classic 48 / 6 / [6, 12, 24] / 12.
+PERIOD      = DS.period
+NLAGS       = DS.lag(2)     # ACF/PACF: two cycles
 THRES       = 0.05
-MAX_LAG_GC  = 6
+MAX_LAG_GC  = DS.lag(0.25)  # Granger: up to a quarter cycle
 TS_POINTS   = 1200
-LB_LAGS     = [6, 12, 24]   # lags for Ljung-Box
-HQC_MAX_LAG = 12            # max AR order for HQC search
-BG_LAGS     = 12            # Breusch-Godfrey: test serial correlation up to this lag
+LB_LAGS     = sorted({DS.lag(0.25), DS.lag(0.5), DS.lag(1)})   # Ljung-Box at ¼, ½, 1 cycle
+HQC_MAX_LAG = DS.lag(0.5)   # max AR order for HQC search
+BG_LAGS     = DS.lag(0.5)   # Breusch-Godfrey: test serial correlation up to this lag
+ZA_MAXLAG   = DS.lag(0.25)  # Zivot-Andrews lag ceiling
+UNIT_1, UNIT_N, UNIT = DS.unit   # one sample: e.g. hour / hours / h
 
 # Variable catalogue, per-variable notes and the tested pairs all come from
 # the dataset config (configs/*.yaml via core.dataset), so nothing below is
@@ -159,7 +166,7 @@ def _run_precompute() -> dict:
         except: kp  = (float("nan"), float("nan"), None, None)
         try:    pp  = PhillipsPerron(s); pp_s, pp_p = pp.stat, pp.pvalue
         except: pp_s, pp_p = float("nan"), float("nan")
-        try:    za  = zivot_andrews(s, maxlag=6, regression="ct"); za_s, za_p = za[0], za[1]
+        try:    za  = zivot_andrews(s, maxlag=ZA_MAXLAG, regression="ct"); za_s, za_p = za[0], za[1]
         except: za_s, za_p = float("nan"), float("nan")
         STAT_RES[col] = dict(
             adf_stat=float(adf[0]), adf_p=float(adf[1]),
@@ -461,8 +468,8 @@ n_dw_ok     = sum(1 for c in AVAILABLE if REGDIAG_RES[c]["dw_ok"])
 from scipy.spatial import cKDTree
 from statsmodels.tsa.api import VAR
 
-VAR_MAX_LAG   = 12    # HQIC order search, consistent with the HQC card
-CCM_MAX_TAU   = 12    # cap on the embedding delay (h)
+VAR_MAX_LAG   = DS.lag(0.5)   # HQIC order search, consistent with the HQC card
+CCM_MAX_TAU   = DS.lag(0.5)   # cap on the embedding delay (half a cycle)
 CCM_E_RANGE   = range(2, 9)
 CCM_N_LIB     = 10    # number of library sizes on the convergence curve
 CCM_N_SAMPLES = 8     # random libraries per library size
@@ -653,7 +660,7 @@ def fig_ci_equilibrium(key: str) -> go.Figure:
                         subplot_titles=[
                             f"{r['label1']} and its long-run fit  α + β·{r['label2']}  (β = {beta:.3f})",
                             f"Equilibrium error  ε̂ = Y − α − βX  ·  EG p = {pf(r['p'])} → {verdict}"
-                            + (f"  ·  half-life ≈ {hl:.1f} h" if hl else "")])
+                            + (f"  ·  half-life ≈ {hl:.1f} {UNIT}" if hl else "")])
     fig.add_trace(go.Scatter(x=t, y=y[::step], mode="lines", name=r["label1"],
                              line=dict(color=ACCENT2, width=1.3)), row=1, col=1)
     fig.add_trace(go.Scatter(x=t, y=fit[::step], mode="lines", name=f"α + β·{r['label2']}",
@@ -686,7 +693,7 @@ def fig_granger_lag_robustness() -> go.Figure:
     thr = -math.log10(THRES)
     zmax = max(max(r) for r in z) if z else 1
     fig = go.Figure(go.Heatmap(
-        z=z, x=[f"lag {l} h" for l in lags], y=labels, text=txt, texttemplate="%{text}",
+        z=z, x=[f"lag {l} {UNIT}" for l in lags], y=labels, text=txt, texttemplate="%{text}",
         textfont=dict(size=11, color=TEXT),
         colorscale=[[0, "rgba(244,115,110,0.55)"], [min(thr / zmax, 1) * 0.999, "rgba(26,30,45,0.9)"],
                     [min(thr / zmax, 1), "rgba(79,142,247,0.45)"], [1, "rgba(45,212,160,0.95)"]],
@@ -848,10 +855,10 @@ def fig_ccm_summary() -> go.Figure:
 # ─────────────────────────────────────────────────────────────────────────────
 from functools import lru_cache
 
-PP_BANDWIDTHS = [0, 2, 4, 8, 12, 16, 24, 32, 48]
+PP_BANDWIDTHS = sorted({0} | {DS.lag(c) for c in (1/12, 1/6, 1/3, 1/2, 2/3, 1, 4/3, 2)})   # 0…2 cycles
 ZA_STEP       = 10       # evaluate every 10th candidate break date
 ZA_TRIM       = 0.15     # same trimming as statsmodels' zivot_andrews
-LB_MAX_LAG    = 48
+LB_MAX_LAG    = DS.lag(2)
 CARD_H        = 360      # height of each per-card figure
 
 
@@ -987,7 +994,7 @@ def _za_scan(col):
     """t-statistic of the unit-root coefficient for every candidate break
     (intercept + trend break, the 'ct' model used in the battery)."""
     s = _series(col)
-    stat, p, crit, baselag, bpidx = zivot_andrews(s, maxlag=6, regression="ct")
+    stat, p, crit, baselag, bpidx = zivot_andrews(s, maxlag=ZA_MAXLAG, regression="ct")
     n = len(s)
     dy = np.diff(s)
     rows = np.arange(baselag + 1, n)                # usable observations (index in s)
@@ -1107,7 +1114,7 @@ def fig_card_jb(col):
 
 
 def fig_card_lb(col):
-    """LB card: Q(h) for every h up to 48 against the χ²_h 95% critical curve."""
+    """LB card: Q(h) for every h up to LB_MAX_LAG against the χ²_h 95% critical curve."""
     d = DIAG_RES[col]
     s = _series(col)
     lb = acorr_ljungbox(s, lags=LB_MAX_LAG, return_df=True)
@@ -1190,7 +1197,7 @@ def fig_card_bg(col):
                            hovertemplate="lag %{x}: r = %{y:.3f}<extra></extra>"))
     for y in (conf, -conf):
         fig.add_hline(y=y, line=dict(color=CI_C, width=1.2, dash="dash"))
-    fig.update_xaxes(title=dict(text="lag (hours)", standoff=4), dtick=1)
+    fig.update_xaxes(title=dict(text=f"lag ({UNIT_N})", standoff=4), dtick=1)
     fig.update_yaxes(title=dict(text="residual autocorrelation", standoff=4))
     verdict = "no serial correlation ✔" if r["bg_ok"] else "serially correlated ✘"
     return _card_layout(fig, f"Breusch-Godfrey (lags 1–{BG_LAGS})  ·  LM = {r['bg_stat']:.0f}, "
@@ -1315,7 +1322,7 @@ def fig_acf_pacf(col: str, max_lag: int = NLAGS) -> go.Figure:
     ax_kw = dict(**_AX,
                  tickfont=dict(size=10, color=MUTED, family=FONT_MONO),
                  title_font=dict(size=11, color=MUTED2, family=FONT_MONO))
-    fig.update_xaxes(**ax_kw, title=dict(text="lag (hours)", standoff=4),
+    fig.update_xaxes(**ax_kw, title=dict(text=f"lag ({UNIT_N})", standoff=4),
                      range=[-0.5, max_lag + 0.5])
     fig.update_yaxes(**ax_kw, title=dict(text="correlation", standoff=4),
                      range=[-1.15, 1.15], dtick=0.25, tickformat=".2f")
@@ -1781,7 +1788,7 @@ def fig_granger_bar() -> go.Figure:
     fig.update_yaxes(**ax_kw)
     fig.update_layout(**_layout(
         height=500, margin=dict(t=46, b=50, l=310, r=80),
-        title=dict(text="Granger Causality  ·  Significance ranking (best lag among 1–6 h)",
+        title=dict(text=f"Granger Causality  ·  Significance ranking (best lag among 1–{MAX_LAG_GC} {UNIT})",
                    font=dict(size=14, color=TEXT), x=0.01),
         bargap=0.3,
     ))
@@ -2284,12 +2291,20 @@ def banner(*items):
     return html.Div(cards, className="summary-banner")
 
 def insight_bar(col):
+    """Interpretation generated from this dataset's own ACF/PACF and
+    stationarity results, plus the analyst's note when the config has one."""
     grp, gc = GROUPS.get(col, ("", MUTED2))
-    ins = INSIGHTS.get(col, "")
-    return html.Div([
-        html.Span(f"[{grp}]", style={"color": gc, "fontWeight": "700"}),
-        html.Span(f"  {ins}"),
-    ], className="insight-bar")
+    a = ACF_STATS.get(col)
+    auto = describe_series(a["acf"], a["pacf"], a["conf"], STAT_RES.get(col),
+                           unit=UNIT, period=PERIOD) if a else ""
+    children = [html.Span(f"[{grp}]", style={"color": gc, "fontWeight": "700"}),
+                html.Span(f"  {auto}")]
+    note = INSIGHTS.get(col, "")
+    if note:
+        children += [html.Br(),
+                     html.Span("Analyst note: ", style={"color": MUTED2, "fontWeight": "700"}),
+                     html.Span(note)]
+    return html.Div(children, className="insight-bar")
 
 def legend_row():
     return html.Div([
@@ -2465,13 +2480,14 @@ DIAG_THEORY = html.Div([
                 "$$\\mathcal{Q} > {\\chi}_{1-a}^2(h)$$",
                 "No autocorrelation up to lag m (the series behaves like white noise).",
                 "Significant autocorrelation exists (the series, or model residuals, has exploitable structure).",
-                "Reported here at lags 6, 12, and 24. "
-                "Lag 24 is critical for meteorological data: a significant Q at lag 24 confirms strong diurnal periodicity. "
+                f"Reported here at lags {', '.join(map(str, LB_LAGS[:-1]))}, and {LB_LAGS[-1]}. "
+                f"Lag {PERIOD} (one dominant cycle) is the key one: a significant Q there confirms strong "
+                f"{'diurnal ' if DS.cycle_is_daily else ''}periodicity. "
                 "p < 0.05 means autocorrelation is present (this is expected for all raw series in this dataset). "
                 "Green = white noise (no autocorrelation). Red = autocorrelation detected.",
                 "Run on raw series here (not model residuals). "
-                "All weather variables are expected to show significant autocorrelation (red) at lags 12 and 24 "
-                "due to the solar diurnal cycle.",
+                f"Strongly cyclic variables are expected to show significant autocorrelation (red) at lags "
+                f"{DS.lag(0.5)} and {PERIOD} because of the dominant cycle.",
                 caveats="Degrees of freedom must be adjusted when applied to ARMA residuals: use h = m - p - q. "
                         "The test is applied to the raw series here, so treat red results as descriptive, "
                         "not as model failures.",
@@ -2485,7 +2501,7 @@ DIAG_THEORY = html.Div([
                 "Think of it as a 'complexity penalty' (adding more lags improves the fit) but HQC penalises "
                 "each additional parameter to prevent overfitting. "
                 "The best AR order is the one that minimises HQC. "
-                "This tells you: 'how many past hours of data are needed to best predict the next hour?'",
+                f"This tells you: 'how many past {UNIT_N} of data are needed to best predict the next {UNIT_1}?'",
                 "Criterion:",
                 r"$$HQC(k) = -2\ln\hat{\sigma}_k^2 + 2k\ln\ln(n)$$"
                 "\n\nwhere $n$ is the sample size, $k$ is the number of AR parameters, "
@@ -2593,8 +2609,8 @@ where $p$ is the number of lagged residuals in the auxiliary regression. Tested 
                         r"residuals, so BG is overwhelmingly significant (red) — pointing toward an AR / seasonal "
                         r"specification.", mathjax=True),
                 "More powerful and general than Durbin-Watson, but the chosen lag p matters.",
-                caveats=dcc.Markdown(r"With strong daily seasonality, a small p can miss the 24-hour cycle — set "
-                        r"$p ≥ 24$ to capture it. Asymptotic $\chi^2$ approximation; reliable for large n.", mathjax=True),
+                caveats=dcc.Markdown(rf"With strong seasonality, a small p can miss the {PERIOD}-{UNIT_1} cycle — set "
+                        rf"$p ≥ {PERIOD}$ to capture it. Asymptotic $\chi^2$ approximation; reliable for large n.", mathjax=True),
             ),
         ], className="theory-row"),
         # Row: Durbin-Watson + spacer
@@ -2640,8 +2656,8 @@ where $p$ is the number of lagged residuals in the auxiliary regression. Tested 
              "At several thousand observations even trivial departures from normality become "
              "'significant'. The plot tells you whether that matters in practice — a few outliers "
              "in the tails versus a genuinely wrong shape."),
-            ("Use Ljung-Box at lag 24 as your diurnal check. ",
-             "A significant statistic there is the signature of an uncaptured daily cycle — exactly "
+            (f"Use Ljung-Box at lag {PERIOD} as your cycle check. ",
+             "A significant statistic there is the signature of an uncaptured dominant cycle — exactly "
              "what you expect before modelling, and what should disappear afterwards."),
             ("Let the HQC-optimal lag seed your AR/ARIMA order. ",
              "Treat it as a principled starting point, then refine with AIC/BIC on the differenced "
@@ -3063,8 +3079,8 @@ GRANGER_THEORY = html.Div([
             ("Fit a VAR on the surviving causal graph. ",
              "Keep only the edges that pass, so the dynamics are estimated jointly rather than one "
              "pair at a time."),
-            ("Block-bootstrap the VAR residuals in 24-hour blocks. ",
-             "Resampling in daily blocks preserves the diurnal autocorrelation that ordinary "
+            (f"Block-bootstrap the VAR residuals in {PERIOD}-{UNIT_1} blocks. ",
+             "Resampling in whole-cycle blocks preserves the cyclic autocorrelation that ordinary "
              "i.i.d. resampling would erase."),
             ("Validate the synthetic series against the original. ",
              "Match both the statistics (a KS test on the distributions) and the dynamical "
@@ -3454,7 +3470,7 @@ tab_exploration = dbc.Tab(
     children=html.Div([
         section_hdr("ACF & PACF Explorer"),
         html.Div(
-            "Autocorrelation and Partial Autocorrelation up to 48 lags. "
+            f"Autocorrelation and Partial Autocorrelation up to {NLAGS} lags. "
             "Blue stems exceed the 95% confidence interval. Gold dashed lines mark ±1.96/√n.",
             className="section-desc"
         ),
@@ -3470,8 +3486,8 @@ tab_exploration = dbc.Tab(
             html.Div([
                 html.Label("Max lags"),
                 dcc.Slider(
-                    id="acf-lags", min=12, max=48, step=1, value=48,
-                    marks={12: "12", 24: "24", 36: "36", 48: "48"},
+                    id="acf-lags", min=DS.lag(0.5), max=NLAGS, step=1, value=NLAGS,
+                    marks={k: str(k) for k in (DS.lag(0.5), DS.lag(1), DS.lag(1.5), NLAGS)},
                     tooltip={"placement": "bottom", "always_visible": True},
                 ),
             ], className="ctrl-block-sm"),
@@ -3645,7 +3661,7 @@ tab_causality = dbc.Tab(
             (len(GRANGER_RES), "Pairs tested", ACCENT2),
             (n_gc, "Significant (5%)", GREEN),
             (len(GRANGER_RES) - n_gc, "Not significant", RED),
-            (MAX_LAG_GC, "Max lags tested (h)", AMBER),
+            (MAX_LAG_GC, f"Max lags tested ({UNIT})", AMBER),
         ),
         plot_card(
             [dcc.Graph(id="gc-heatmap", figure=fig_granger_heatmap(), config=PLOTLY_CFG)],
@@ -3653,7 +3669,7 @@ tab_causality = dbc.Tab(
         ),
         plot_card(
             [dcc.Graph(id="gc-bar", figure=fig_granger_bar(), config=PLOTLY_CFG)],
-            label="Significance ranking  ·  best lag among 1–6 h"
+            label=f"Significance ranking  ·  best lag among 1–{MAX_LAG_GC} {UNIT}"
         ),
 
         # ── Key Caveats: lag robustness (theory card companion) ──────────────

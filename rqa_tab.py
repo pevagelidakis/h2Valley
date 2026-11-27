@@ -79,6 +79,8 @@ FONT_MONO = "'IBM Plex Mono','Fira Code',monospace"
 
 DS = get_dataset()
 CSV_PATH = DS.path
+UNIT_1, UNIT_N, UNIT = DS.unit   # one sample: e.g. hour / hours / h
+_SAMPLES = "samples" if UNIT_N == "samples" else f"samples / {UNIT_N}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  VARIABLE CATALOGUE  —  from the dataset config (configs/*.yaml via
@@ -93,14 +95,14 @@ DEFAULT_COL_A, DEFAULT_COL_B = DS.default_pair()
 # ─────────────────────────────────────────────────────────────────────────────
 #  RQA CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
-AMI_MAX_LAG        = 30     # lags scanned for the average-mutual-information delay estimate
+AMI_MAX_LAG        = DS.lag(1.25)   # lags scanned for the average-mutual-information delay estimate
 AMI_BINS           = 16     # histogram bins for the AMI estimator
 FNN_MAX_DIM        = 10     # highest embedding dimension tried by false-nearest-neighbours
 FNN_RTOL           = 15.0   # Kennel et al. (1992) criterion-1 threshold
 FNN_ATOL           = 2.0    # Hegger/Kantz criterion-2 threshold (relative to attractor size)
 FNN_THRESHOLD_PCT  = 10.0   # stop increasing m once %FNN falls at/below this
 
-TAU_MIN, TAU_MAX   = 1, 24
+TAU_MIN, TAU_MAX   = 1, DS.lag(1)   # up to one dominant cycle
 M_MIN, M_MAX        = 1, 8
 WINDOW_MIN, WINDOW_MAX, WINDOW_DEFAULT = 150, 600, 300
 RR_MIN, RR_MAX, RR_DEFAULT = 2, 25, 10       # target recurrence rate, percent
@@ -110,7 +112,7 @@ METRIC_DEFAULT      = "l2"
 METRIC_OPTIONS      = [{"label": "ℓ1 (Manhattan)", "value": "l1"},
                        {"label": "ℓ2 (Euclidean)", "value": "l2"},
                        {"label": "ℓ∞ (Chebyshev)", "value": "linf"}]
-SW_PERIOD_MIN_DEFAULT = 24                    # Lomb-Scargle search band (samples) for the sliding window
+SW_PERIOD_MIN_DEFAULT = DS.period             # Lomb-Scargle search band (samples) for the sliding window
 SW_STEP_DEFAULT       = 25                    # sliding-window step, % of the window length
 SW_MIN_EMBEDDED       = 30                    # min embedded points per window (window is raised to meet it)
 PCT_KEYS              = ("rr", "det", "lam")  # measures displayed in %
@@ -595,10 +597,10 @@ def fig_tau_rr(rec: dict, colA: str, colB: str, tau_max: int) -> go.Figure:
             T = _recurrence_period(taus, rr)
             if T is not None:
                 fig.add_vline(x=T, line=dict(color=color, width=1.2, dash="dash"),
-                              annotation_text=f"T ≈ {T} h", annotation_position="top",
+                              annotation_text=f"T ≈ {T} {UNIT}", annotation_position="top",
                               annotation_font=dict(size=10, color=color, family=FONT_MONO))
     fig.add_vline(x=0, line=dict(color=ZERO_L, width=1))
-    fig.update_xaxes(**_AX, title_text="Lag τ (samples / hours) — not the embedding delay")
+    fig.update_xaxes(**_AX, title_text=f"Lag τ ({_SAMPLES}) — not the embedding delay")
     fig.update_yaxes(**_AX, title_text="RR_τ (%)", rangemode="tozero")
     fig.update_layout(**_base_layout(height=340, showlegend=True,
                                      legend=dict(orientation="h", y=1.14, x=0),
@@ -622,7 +624,7 @@ def fig_identification(ident: dict, col: str) -> go.Figure:
                               line=dict(color=GREEN, width=1.6),
                               marker=dict(size=4), hoverinfo="skip"), row=1, col=2)
     fig.add_vline(x=ident["m"], line=dict(color=AMBER, width=1.5, dash="dash"), row=1, col=2)
-    fig.update_xaxes(row=1, col=1, **_AX, title_text="Lag τ (hours)")
+    fig.update_xaxes(row=1, col=1, **_AX, title_text=f"Lag τ ({UNIT_N})")
     fig.update_yaxes(row=1, col=1, **_AX, title_text="AMI (nats)")
     fig.update_xaxes(row=1, col=2, **_AX, title_text="Embedding dimension m")
     fig.update_yaxes(row=1, col=2, **_AX, title_text="False neighbours (%)")
@@ -643,9 +645,9 @@ def fig_periodogram(lsA, lsB, colA, colB, window: int) -> go.Figure:
                                   hovertemplate="period %{x:.1f} h<br>power %{y:.3f}<extra>" + la + "</extra>"))
         fig.add_vline(x=period, line=dict(color=color, width=1.4, dash=dash))
     fig.add_annotation(x=math.log10(lsA[0]), y=1, xref="x", yref="paper", yanchor="bottom",
-                       text=f"window = {window} h", showarrow=False,
+                       text=f"window = {window} {UNIT}", showarrow=False,
                        font=dict(size=10, color=AMBER, family=FONT_MONO))
-    fig.update_xaxes(**_AX, type="log", title_text="Period (hours / samples)")
+    fig.update_xaxes(**_AX, type="log", title_text=f"Period ({_SAMPLES})")
     fig.update_yaxes(**_AX, title_text="Normalised LS power")
     fig.update_layout(**_base_layout(height=280, showlegend=True,
                                      legend=dict(orientation="h", y=1.12, x=0)))
@@ -1053,9 +1055,9 @@ tab_rqa = dbc.Tab(
                            tooltip={"placement": "bottom", "always_visible": True}),
             ], className="ctrl-block-sm"),
             html.Div([
-                html.Label(_md(rf"Time delay $\tau$, hours ({TAU_MIN}–{TAU_MAX})", inline=True)),
-                dcc.Slider(id="rqa-tau", min=TAU_MIN, max=TAU_MAX, step=1, value=6,
-                           marks={1: "1", 6: "6", 12: "12", 24: "24"},
+                html.Label(_md(rf"Time delay $\tau$, {UNIT_N} ({TAU_MIN}–{TAU_MAX})", inline=True)),
+                dcc.Slider(id="rqa-tau", min=TAU_MIN, max=TAU_MAX, step=1, value=DS.lag(0.25),
+                           marks={k: str(k) for k in (1, DS.lag(0.25), DS.lag(0.5), TAU_MAX)},
                            tooltip={"placement": "bottom", "always_visible": True}),
             ], className="ctrl-block-sm"),
             html.Div([
@@ -1068,15 +1070,15 @@ tab_rqa = dbc.Tab(
 
         html.Div([
             html.Div([
-                html.Label(f"Window length, hours ({WINDOW_MIN}–{WINDOW_MAX})"),
+                html.Label(f"Window length, {UNIT_N} ({WINDOW_MIN}–{WINDOW_MAX})"),
                 dcc.Slider(id="rqa-win-len", min=WINDOW_MIN, max=WINDOW_MAX, step=10,
                            value=WINDOW_DEFAULT,
                            marks={WINDOW_MIN: str(WINDOW_MIN), WINDOW_MAX: str(WINDOW_MAX)},
                            tooltip={"placement": "bottom", "always_visible": True}),
             ], className="ctrl-block-sm"),
             html.Div([
-                html.Label("Window start (hours from series start)"),
-                dcc.Slider(id="rqa-win-start", min=0, max=_WIN_START_MAX, step=24,
+                html.Label(f"Window start ({UNIT_N} from series start)"),
+                dcc.Slider(id="rqa-win-start", min=0, max=_WIN_START_MAX, step=DS.period,
                            value=_WIN_START_DEFAULT, marks=_WIN_MARKS,
                            tooltip={"placement": "bottom", "always_visible": True}),
             ], className="ctrl-block-sm"),
@@ -1128,10 +1130,10 @@ tab_rqa = dbc.Tab(
         ),
         html.Div([
             html.Div([
-                html.Label("Lomb-Scargle period search band (hours / samples)"),
+                html.Label(f"Lomb-Scargle period search band ({_SAMPLES})"),
                 dcc.RangeSlider(id="rqa-sw-band", min=2, max=SW_PERIOD_MAX, step=1,
                                 value=[SW_PERIOD_MIN_DEFAULT, SW_PERIOD_MAX_DEFAULT],
-                                marks={2: "2", 24: "24", 168: "168",
+                                marks={2: "2", DS.period: str(DS.period), DS.lag(7): str(DS.lag(7)),
                                        SW_PERIOD_MAX_DEFAULT: str(SW_PERIOD_MAX_DEFAULT),
                                        SW_PERIOD_MAX: str(SW_PERIOD_MAX)},
                                 tooltip={"placement": "bottom", "always_visible": True}),
@@ -1294,7 +1296,7 @@ def register_rqa_callbacks(app):
         tau_max = max(1, rec["L"] // TAU_RR_FRACTION)
         T_a = _recurrence_period(*rqa_funs.tau_recurrence_rate(rec["R_a"], tau_max))
         T_b = _recurrence_period(*rqa_funs.tau_recurrence_rate(rec["R_b"], tau_max))
-        fmt_T = lambda T: f"$T \\approx {T}$ h" if T is not None else "no clear period"
+        fmt_T = lambda T: f"$T \\approx {T}$ {UNIT}" if T is not None else "no clear period"
         taurr_desc = _md(
             rf"$RR_\tau = \frac{{1}}{{N-\tau}}\sum_i R_{{i,i+\tau}}$ for lags $\tau = 1..{tau_max}$ "
             rf"(half the {rec['L']:,} embedded points; here $\tau$ is a lag, not the embedding "
@@ -1377,10 +1379,10 @@ def register_rqa_callbacks(app):
         n_win = len(sw["A"])
         raised = window > round(lsA[0])
         banner = _banner(
-            (f"{lsA[0]:.1f} h", f"LS period · {LABELS.get(colA, colA)}", COLORS.get(colA, ACCENT2)),
-            (f"{lsB[0]:.1f} h", f"LS period · {LABELS.get(colB, colB)}", COLORS.get(colB, ACCENT)),
-            (f"{window} h", "Window length" + (" (raised)" if raised else ""), AMBER),
-            (f"{step} h", f"Step ({step_pct}%)", MUTED2),
+            (f"{lsA[0]:.1f} {UNIT}", f"LS period · {LABELS.get(colA, colA)}", COLORS.get(colA, ACCENT2)),
+            (f"{lsB[0]:.1f} {UNIT}", f"LS period · {LABELS.get(colB, colB)}", COLORS.get(colB, ACCENT)),
+            (f"{window} {UNIT}", "Window length" + (" (raised)" if raised else ""), AMBER),
+            (f"{step} {UNIT}", f"Step ({step_pct}%)", MUTED2),
             (f"{n_win:,}", "Windows", MUTED2),
             (f"{sw['cross'].attrs['epsilon']:.3f}", "Fixed ε · cross (z-units)", ACCENT2),
         )

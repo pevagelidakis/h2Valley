@@ -20,6 +20,7 @@ from scipy.spatial import cKDTree
 from scipy.spatial.distance import pdist
 from statsmodels.tsa.stattools import acf as sm_acf
 
+from core.dataset import get_dataset
 from rqa_funs import embed, distance_matrix, epsilon_for_rr, recurrence_matrix, \
     rqa_measures, tau_recurrence_rate
 from rqa_tab import _ami, _first_minimum, _fnn_curve, _select_dim, \
@@ -28,7 +29,8 @@ from rqa_tab import _ami, _first_minimum, _fnn_curve, _select_dim, \
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
-TAU_BOUNDS = (1, 24)
+_DS = get_dataset()        # lags below are multiples of its dominant cycle (24 for spg.csv)
+TAU_BOUNDS = (1, _DS.lag(1))
 M_BOUNDS   = (2, 8)        # m = 1 is no phase space at all, so synthesis needs m ≥ 2
 
 # Twin surrogates
@@ -54,9 +56,9 @@ GENDA_POOL    = 8          # nearest passages the residual forcing is drawn from
 RQA_WINDOW    = 1000       # samples per RQA window …
 RQA_N_WINDOWS = 5          # … and windows tiling the whole record (averaged)
 RQA_RR        = 0.05       # fixed recurrence rate → DET/LAM/... comparable across series
-RR_TAU_MAX    = 72         # τ-recurrence-rate curve up to 3 days
+RR_TAU_MAX    = _DS.lag(3)  # τ-recurrence-rate curve up to three cycles
 D2_SAMPLE     = 1500       # points used for the correlation sum
-ACF_LAGS      = 48
+ACF_LAGS      = _DS.lag(2)
 LYAP_HORIZON  = 4          # divergence curve followed for LYAP_HORIZON·τ steps
 
 

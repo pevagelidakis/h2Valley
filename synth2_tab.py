@@ -78,6 +78,7 @@ FONT_MONO = "'IBM Plex Mono','Fira Code',monospace"
 
 DS = get_dataset()
 CSV_PATH = DS.path
+UNIT_1, UNIT_N, UNIT = DS.unit   # one sample: e.g. hour / hours / h
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  VARIABLE CATALOGUE  —  from the dataset config (configs/*.yaml via
@@ -99,8 +100,8 @@ METHODS = {
 DEFAULT_METHOD = "iaaft"
 N_REALS_MAX    = 8      # ensemble size ceiling in the UI
 IAAFT_ITER     = 120    # spectrum/rank alternation sweeps (converges ≪ 100)
-AR_MAXLAG      = 48     # ceiling for AIC lag selection on normal scores
-BOOT_BLOCK_MAX = 96     # block-length slider ceiling (hours)
+AR_MAXLAG      = DS.lag(2)   # ceiling for AIC lag selection on normal scores (two cycles)
+BOOT_BLOCK_MAX = DS.lag(4)   # block-length slider ceiling (four cycles)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  DATA  (shared loader: core.dataset)
@@ -177,7 +178,7 @@ def _identify(col: str) -> dict:
 
     # default bootstrap block length = dominant periodogram cycle
     periods, powers = _periodogram(y)
-    block_len = int(round(periods[np.argmax(powers)])) if len(periods) else 24
+    block_len = int(round(periods[np.argmax(powers)])) if len(periods) else DS.period
     block_len = int(np.clip(block_len, 4, BOOT_BLOCK_MAX))
 
     # normal scores: rank -> uniform (Hazen plotting position) -> Φ⁻¹
@@ -206,7 +207,7 @@ def _identify(col: str) -> dict:
     except Exception:
         pass                                            # keep AR(1) fallback
 
-    nlags_view = min(48, n // 4)
+    nlags_view = min(DS.lag(2), n // 4)
     return dict(
         col=col, y=y, idx=idx, n=n, mu_y=mu_y,
         y_sorted=y_sorted, amp=amp,
@@ -595,7 +596,7 @@ def stat_banner(ident: dict, sims: np.ndarray, method: str, block_len: int):
     wd = sp_stats.wasserstein_distance(ident["y"], pool)
     wd_rel = wd / max(ident["moments_real"]["std"], 1e-9)
     knob = {"iaaft": f"{IAAFT_ITER} iterations",
-            "bootstrap": f"block = {block_len} h",
+            "bootstrap": f"block = {block_len} {UNIT}",
             "copula": f"AR({ident['ar_order']})"}[method]
     return _banner(
         (METHODS[method].split(" (")[0], "Class-2 method", GREEN,
@@ -867,9 +868,9 @@ tab_synth2 = dbc.Tab(
                            tooltip={"placement": "bottom", "always_visible": True}),
             ], className="ctrl-block-sm"),
             html.Div([
-                html.Label("Bootstrap block length (hours · method ② only)"),
-                dcc.Slider(id="s2-block", min=4, max=BOOT_BLOCK_MAX, step=1, value=24,
-                           marks={4: "4", 24: "24", 48: "48", 96: "96"},
+                html.Label(f"Bootstrap block length ({UNIT_N} · method ② only)"),
+                dcc.Slider(id="s2-block", min=4, max=BOOT_BLOCK_MAX, step=1, value=DS.period,
+                           marks={k: str(k) for k in (4, DS.period, DS.lag(2), BOOT_BLOCK_MAX)},
                            tooltip={"placement": "bottom", "always_visible": True}),
             ], className="ctrl-block-sm"),
             html.Div([
@@ -983,9 +984,9 @@ def register_synth2_callbacks(app):
     def _default_block(col):
         """When the variable changes, snap the bootstrap block-length slider
         to that variable's detected dominant cycle (its documented default).
-        Falls back to 24 h while identification is still running."""
+        Falls back to one dominant cycle while identification is still running."""
         ident = get_ident(col or DEFAULT_COL)
-        return ident["block_len"] if ident else 24
+        return ident["block_len"] if ident else DS.period
 
     @app.callback(
         Output("s2-banner", "children"),

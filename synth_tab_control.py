@@ -70,6 +70,7 @@ FONT_MONO = "'IBM Plex Mono','Fira Code',monospace"
 
 DS = get_dataset()
 CSV_PATH = DS.path
+UNIT_1, UNIT_N, UNIT = DS.unit   # one sample: e.g. hour / hours / h
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  VARIABLE CATALOGUE  —  from the dataset config (configs/*.yaml via
@@ -106,7 +107,7 @@ if DEFAULT_COL not in AVAILABLE:
 #  cover) can't lock onto a spurious long "cycle" and blow up the SARIMAX
 #  state dimension (cost scales with the seasonal period).
 # ─────────────────────────────────────────────────────────────────────────────
-def _periodogram(y, min_period=4, max_period=30):
+def _periodogram(y, min_period=4, max_period=DS.lag(1.25)):
     x = y - y.mean()
     n = len(x)
     fft = np.fft.rfft(x)
@@ -265,7 +266,7 @@ def _fit_model(col: str) -> dict:
     z = (y - mu_y) / sd_y
 
     periods, powers = _periodogram(y)
-    seasonal_period = int(round(periods[np.argmax(powers)])) if len(periods) else 24
+    seasonal_period = int(round(periods[np.argmax(powers)])) if len(periods) else DS.period
     seasonal_period = max(seasonal_period, 3)
 
     adf_p = float(adfuller(y, autolag="AIC")[1])
@@ -400,7 +401,7 @@ def _validation_ensemble(m: dict) -> dict:
     z_sims, sim_method, burn_in = simulate_unconditional(m["res"], z, n, N_VALIDATION, seed=42)
     z_sims = np.nan_to_num(z_sims, nan=0.0, posinf=0.0, neginf=0.0)
     valid_sims = z_sims * sd_y + mu_y            # back to physical units
-    nlags_view = min(48, n // 4)
+    nlags_view = min(DS.lag(2), n // 4)
     acf_real  = _safe_acf(y, nlags_view)
     pacf_real = _safe_pacf(y, nlags_view)
     acf_sim   = np.column_stack([_safe_acf(valid_sims[:, k], nlags_view) for k in range(N_VALIDATION)])
@@ -686,7 +687,7 @@ def fig_overlay(m: dict, n_sims: int, horizon: int, seed: int):
                      "span, not a copy of the real data, but the same generative shape.")
     else:
         sims = simulate_future(m, horizon, n_sims, seed)
-        future_idx = pd.date_range(start=m["idx"][-1] + pd.Timedelta(hours=1), periods=horizon, freq="h")
+        future_idx = pd.date_range(start=m["idx"][-1], periods=horizon + 1, freq=DS.index_freq)[1:]
         for k in range(sims.shape[1]):
             x_fut = [m["idx"][-1]] + list(future_idx)
             y_fut = [m["y"][-1]] + list(sims[:, k])
@@ -985,7 +986,7 @@ SYNTH_THEORY = html.Div([
                     html.Div([
                         html.B("② Future-projection mode"), " (horizon slider > 0): the model is anchored "
                         "on its filtered state at the very last real observation, then rolled forward for "
-                        "the requested number of hours with fresh random shocks. Each realisation is a "
+                        f"the requested number of {UNIT_N} with fresh random shocks. Each realisation is a "
                         "plausible — not certain — continuation of the real series, diverging further "
                         "from any single 'true' future the longer the horizon.",
                     ], style={"marginTop": "6px"}),
@@ -1096,9 +1097,11 @@ tab_synth = dbc.Tab(
                           tooltip={"placement": "bottom", "always_visible": True}),
             ], className="ctrl-block-sm"),
             html.Div([
-                html.Label("Horizon beyond history (hours)"),
-                dcc.Slider(id="synth-horizon", min=0, max=336, step=24, value=0,
-                          marks={0: "0 (shape check)", 168: "1 wk", 336: "2 wk"},
+                html.Label(f"Horizon beyond history ({UNIT_N})"),
+                dcc.Slider(id="synth-horizon", min=0, max=DS.lag(14), step=DS.period, value=0,
+                          marks={0: "0 (shape check)",
+                                 DS.lag(7): "1 wk" if DS.cycle_is_daily else "7 cycles",
+                                 DS.lag(14): "2 wk" if DS.cycle_is_daily else "14 cycles"},
                           tooltip={"placement": "bottom", "always_visible": True}),
             ], className="ctrl-block-sm"),
             html.Div([

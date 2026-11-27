@@ -60,6 +60,7 @@ class DatasetSpec:
     time_column: Optional[str] = None
     freq: Optional[str] = None
     end: Optional[str] = None
+    period_cfg: Any = None                                      # int, or None/"auto"
     target: Optional[str] = None
     include: Optional[list[str]] = None
     exclude: list[str] = field(default_factory=list)
@@ -68,6 +69,7 @@ class DatasetSpec:
     series_meta: dict[str, dict] = field(default_factory=dict)  # col -> {label, group, unit, notes}
     pair_cfg: dict[str, Any] = field(default_factory=dict)
     _frame: Optional[pd.DataFrame] = field(default=None, repr=False)
+    _period_auto: Optional[int] = field(default=None, repr=False)
 
     # ── data ────────────────────────────────────────────────────────────────
     def frame(self) -> pd.DataFrame:
@@ -112,6 +114,89 @@ class DatasetSpec:
     @property
     def n_obs(self) -> int:
         return len(self._frame) if self._frame is not None else len(self.frame())
+
+    # ── time scale ──────────────────────────────────────────────────────────
+    # Every lag, window and horizon in the app is expressed in units of the
+    # dataset's dominant cycle (`period`, in samples) instead of a hardcoded
+    # "24 h". For hourly data with a daily cycle that reproduces the classic
+    # values (lag(2) = 48, lag(0.25) = 6, ...); for 15-min or daily data the
+    # same code scales itself.
+    @property
+    def step(self) -> Optional[pd.Timedelta]:
+        """Sampling interval, or None when the timestamps are irregular."""
+        if self._frame is None:
+            self.frame()
+        if not self.freq:
+            return None
+        try:
+            return pd.to_timedelta(pd.tseries.frequencies.to_offset(self.freq))
+        except (ValueError, TypeError):
+            return None   # calendar frequencies (month start, ...) have no fixed length
+
+    @property
+    def index_freq(self):
+        """What to pass as `freq=` when extending the index into the future."""
+        if self._frame is None:
+            self.frame()
+        if self.freq:
+            return self.freq
+        diffs = self._frame.index.to_series().diff().dropna()
+        return diffs.median() if len(diffs) else pd.Timedelta(hours=1)
+
+    @property
+    def unit(self) -> tuple[str, str, str]:
+        """(singular, plural, abbreviation) of one sample, e.g. ("hour", "hours", "h").
+        Anything that is not exactly one hour/day/minute/second is a "sample"."""
+        known = {pd.Timedelta(hours=1): ("hour", "hours", "h"),
+                 pd.Timedelta(days=1): ("day", "days", "d"),
+                 pd.Timedelta(minutes=1): ("minute", "minutes", "min"),
+                 pd.Timedelta(seconds=1): ("second", "seconds", "s")}
+        return known.get(self.step, ("sample", "samples", "samples"))
+
+    @property
+    def cycle_is_daily(self) -> bool:
+        return self.step is not None and self.step * self.period == pd.Timedelta(days=1)
+
+    @property
+    def period(self) -> int:
+        """Dominant cycle length in samples: the config's `time.period`, else
+        detected from the data (see `detect_period`)."""
+        if isinstance(self.period_cfg, (int, float)) and self.period_cfg >= 2:
+            return int(self.period_cfg)
+        if self._period_auto is None:
+            self._period_auto = self.detect_period()
+            print(f"  dataset '{self.id}': dominant cycle detected at "
+                  f"{self._period_auto} samples (set time.period in the config to override)")
+        return self._period_auto
+
+    def detect_period(self) -> int:
+        """The period with the most power in the average normalised
+        periodogram of the target and every driver, searched over
+        2 … n/4 samples. Falls back to one day of samples (or 24)."""
+        df = self.frame()
+        cols = [c for c in [self.target] + self.columns() if c in df.columns and c is not None]
+        n = len(df)
+        total = None
+        for c in cols:
+            x = df[c].interpolate(limit_direction="both").to_numpy(dtype=float)
+            if not np.isfinite(x).all() or x.std() == 0:
+                continue
+            p = np.abs(np.fft.rfft((x - x.mean()) / x.std())) ** 2
+            p = p / p[1:].sum()
+            total = p if total is None else total + p
+        if total is not None and n >= 8:
+            periods = 1.0 / np.fft.rfftfreq(n)[1:]
+            keep = (periods >= 2) & (periods <= max(3, n // 4))
+            if keep.any():
+                return int(round(periods[keep][np.argmax(total[1:][keep])]))
+        step = self.step
+        if step is not None and step < pd.Timedelta(days=1):
+            return int(pd.Timedelta(days=1) / step)
+        return 24
+
+    def lag(self, cycles: float, minimum: int = 1) -> int:
+        """`cycles` dominant cycles, in samples (rounded half-up, at least `minimum`)."""
+        return max(minimum, int(np.floor(self.period * cycles + 0.5)))
 
     # ── columns ─────────────────────────────────────────────────────────────
     def _numeric(self) -> list[str]:
@@ -210,8 +295,14 @@ class DatasetSpec:
 
 def load_spec(config_path: str | Path) -> DatasetSpec:
     cfg_path = _resolve(config_path)
-    with open(cfg_path, encoding="utf-8") as fh:
-        cfg = yaml.safe_load(fh) or {}
+    raw = cfg_path.read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:   # e.g. saved as ANSI/cp1252 by a Windows editor
+        text = raw.decode("cp1252", errors="replace")
+        print(f"  WARNING: {cfg_path} is not UTF-8; read it as Windows-1252 "
+              f"(save it as UTF-8 to silence this)")
+    cfg = yaml.safe_load(text) or {}
     if "path" not in cfg:
         raise KeyError(f"{cfg_path}: 'path' (the data file) is required")
     time_cfg = cfg.get("time") or {}
@@ -223,6 +314,7 @@ def load_spec(config_path: str | Path) -> DatasetSpec:
         time_column=time_cfg.get("column"),
         freq=time_cfg.get("freq"),
         end=time_cfg.get("end"),
+        period_cfg=None if time_cfg.get("period") in (None, "auto") else int(time_cfg["period"]),
         target=cfg.get("target"),
         include=cfg.get("include"),
         exclude=list(cfg.get("exclude") or []),

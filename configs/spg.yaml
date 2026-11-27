@@ -16,10 +16,18 @@ path: data/spg.csv                # relative to the project root
 # `freq` steps ending at the current hour (end: null) or at a fixed `end`.
 # For real data set `column` to the timestamp column; `freq` is then inferred
 # from the timestamps when left null.
+#
+# `period` is the dominant cycle in SAMPLES. Every lag, window and horizon in
+# the app is a multiple of it (ACF lags = 2 cycles, Ljung-Box at ¼, ½, 1
+# cycle, bootstrap blocks up to 4 cycles, ...). Leave it out (or `auto`) to
+# detect it from the data's periodogram.
+# NOTE: spg.csv keeps daylight rows only, so its detected cycle is ~15 samples,
+# not 24. 24 is kept here because every result so far was produced with it.
 time:
   column: null
   freq: h
   end: null
+  period: 24
 
 # Forecasting / synthesis target. It is kept OUT of the driver set used by the
 # statistical battery, SARIMA, Class-II and RQA tabs (Synthetic Data III and
