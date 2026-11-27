@@ -401,6 +401,8 @@ series less than the real series deviates from itself.
 ├── app_theory.py          # Extended edition (+VAR block exogeneity, +CCM, one plot per
 │                          #   theory card). Standalone; runs on port 8051
 ├── cache_utils.py         # On-disk memoisation shared by every heavy computation
+├── core/dataset.py        # DatasetSpec: loads the active dataset config, shared by every module
+├── configs/spg.yaml       # Dataset config: path, time axis, target, labels/units/groups, pairs
 ├── map_tab.py             # EU H₂ Map tab
 ├── synth_tab_control.py   # Synthetic Data I  (SARIMA)
 ├── synth2_tab.py          # Synthetic Data II (IAAFT / bootstrap / copula)
@@ -430,7 +432,8 @@ Importing `app.py` does all the work, in this order:
    - `synth2_tab` — Class-II identification
    - `rqa_tab` — phase-space (τ, m) identification
    - `synth3_tab` — Class-III identification, then GENDA training
-3. **Load `data/spg.csv`** and stamp the hourly index.
+3. **Load the active dataset** (`configs/spg.yaml` → `data/spg.csv` by default) through
+   `core.dataset`, which builds the time index once for every module.
 4. **Run the statistical test battery** (ACF/PACF, 4 stationarity tests, 3 cointegration
    tests, Granger, normality, Ljung–Box, HQC, BP/BG/DW) — or load it from cache. This step
    **is** blocking: the web server answers only after it finishes.
@@ -616,14 +619,17 @@ volume across, or let it compute once.
 
 | What | Where | Default / notes |
 |---|---|---|
-| Proxy dataset | `CSV_PATH` in `app.py` (and the tab modules) | `data/spg.csv` |
+| Analysed dataset | `H2V_DATASET` env var → a config in `configs/` | `configs/spg.yaml` (→ `data/spg.csv`) |
+| Columns, target, labels, units, groups, notes | `series:`, `target:`, `include`/`exclude` in the config | all numeric columns except the target |
+| Time axis | `time:` in the config (`column`, `freq`, `end`) | no timestamp column → hourly index ending now |
+| Tested pairs | `pairs:` in the config (explicit list or `auto`) | 13 cointegration / 14 Granger pairs |
+| Default variables in the UI | `defaults:` in the config | temperature; RQA pair shortwave ↔ temperature |
 | Map dataset | `XLSX_PATH` in `map_tab.py` | IEA capacity workbook in `data/` |
 | Map country filter | `EU_COUNTRIES` in `map_tab.py` | European countries |
 | ACF/PACF lags | `NLAGS` in `app.py` | 48 |
 | Significance level | `THRES` in `app.py` | 0.05 |
 | Granger max lag | `MAX_LAG_GC` in `app.py` | 6 |
 | Ljung–Box lags / HQC max lag / BG lags | `LB_LAGS`, `HQC_MAX_LAG`, `BG_LAGS` | [6, 12, 24] / 12 / 12 |
-| Tested pairs | `COINT_PAIRS`, `GRANGER_PAIRS` in `app.py` | 13 / 14 pairs |
 | SARIMA realisations | `N_VALIDATION` in `synth_tab_control.py` | 6 |
 | SARIMA search budget | `SEARCH_BUDGET_S` in `synth_tab_control.py` | 240 s per variable |
 | RQA window / target RR | `WINDOW_DEFAULT`, `RR_DEFAULT` in `rqa_tab.py` | 300 h / 10% |
@@ -635,6 +641,12 @@ volume across, or let it compute once.
 
 Changing the data or any of these values invalidates only the affected cache entries;
 the next start recomputes them.
+
+**Analysing another file.** Copy `configs/spg.yaml`, set `path`, `time.column` /
+`time.freq` and `target`, and drop the `notes:` (they describe the proxy data only). Then
+start with `H2V_DATASET=configs/<name>.yaml` (PowerShell: `$env:H2V_DATASET="configs/<name>.yaml"`),
+or set it under `environment:` for the `app` service in `docker-compose.yml`. Lag settings
+(`NLAGS`, `LB_LAGS`, ...) still assume hourly data.
 
 ---
 

@@ -1,0 +1,191 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Dataset spec: the ONE place that describes an input file.
+#  Every analysis module reads it through `core.dataset.get_dataset()`; no
+#  module hardcodes a path, a column name or a variable pair.
+#
+#  To analyse another file, copy this config, edit it, and point the app at it:
+#      H2V_DATASET=configs/my_data.yaml python app.py
+#  Everything below except `path` is optional; missing metadata falls back to
+#  sensible defaults (label = column name, group = "Other", no notes, ...).
+# ─────────────────────────────────────────────────────────────────────────────
+id: spg_proxy
+name: "Saronic Gulf PV / meteorology proxy"
+path: data/spg.csv                # relative to the project root
+
+# Time axis. spg.csv has no timestamp column, so an index is synthesised:
+# `freq` steps ending at the current hour (end: null) or at a fixed `end`.
+# For real data set `column` to the timestamp column; `freq` is then inferred
+# from the timestamps when left null.
+time:
+  column: null
+  freq: h
+  end: null
+
+# Forecasting / synthesis target. It is kept OUT of the driver set used by the
+# statistical battery, SARIMA, Class-II and RQA tabs (Synthetic Data III and
+# forecasting use it explicitly).
+target: generated_power_kw
+
+# Driver series = every numeric column except the target, the time column and
+# `exclude`, in file order. Set `include` to a list to restrict it instead.
+include: null
+exclude: []
+
+# Variables pre-selected in the UI (fall back to the first drivers if absent).
+defaults:
+  variable: temperature_2_m_above_gnd                               # Synthetic Data I / II
+  pair: [shortwave_radiation_backwards_sfc, temperature_2_m_above_gnd]  # RQA cross-recurrence
+
+# Colour per group. Series metadata: label, group, unit, notes. `notes` is the
+# hand-written interpretation shown next to the ACF/PACF; it describes THIS
+# dataset only, so a new dataset should start without it.
+groups:
+  "Temperature": "#f07040"
+  "Humidity": "#34c9a0"
+  "Pressure": "#a78bfa"
+  "Precipitation": "#60a5fa"
+  "Cloud": "#94a3b8"
+  "Radiation": "#fbbf24"
+  "Wind": "#34d399"
+  "Solar Geometry": "#fbbf24"
+
+series:
+  generated_power_kw:
+    label: "Generated Power (PV target)"
+    unit: "kW"
+  temperature_2_m_above_gnd:
+    label: "Temperature (2 m)"
+    group: "Temperature"
+    unit: "°C"
+    notes: "Sinusoidal ACF peaking at lag 12. Diurnal heating cycle dominates. PACF cuts off after lag 12 → AR(12) residual structure."
+  relative_humidity_2_m_above_gnd:
+    label: "Relative Humidity (2 m)"
+    group: "Humidity"
+    unit: "%"
+    notes: "Mirror of temperature (peaks overnight), troughs mid-afternoon. Strong 24h period. PACF cuts off after lag 13 → AR(13)."
+  mean_sea_level_pressure_MSL:
+    label: "Sea-level Pressure"
+    group: "Pressure"
+    unit: "hPa"
+    notes: "Weak semi-diurnal (~12h) tidal oscillation on synoptic variability. PACF shows peaks at lags 31."
+  total_precipitation_sfc:
+    label: "Total Precipitation"
+    group: "Precipitation"
+    unit: "mm"
+    notes: "Near-zero ACF at all lags (highly intermittent). Near-white-noise at hourly resolution. Essentially unpredictable beyond lag 1."
+  snowfall_amount_sfc:
+    label: "Snowfall"
+    group: "Precipitation"
+    unit: "cm"
+    notes: "Highly sparse with near-zero ACF. Rare, episodic events dominated by synoptic patterns over days."
+  total_cloud_cover_sfc:
+    label: "Cloud Cover (total)"
+    group: "Cloud"
+    unit: "%"
+    notes: "Moderate 24h cycle from sea-breeze and convective patterns. PACF cuts off ~lag 3. Explains cloud cover failure in Granger tests."
+  high_cloud_cover_high_cld_lay:
+    label: "Cloud Cover (high)"
+    group: "Cloud"
+    unit: "%"
+    notes: "Weaker ACF than total cloud: cirrus driven by upper-tropospheric dynamics independent of surface diurnal cycles."
+  medium_cloud_cover_mid_cld_lay:
+    label: "Cloud Cover (medium)"
+    group: "Cloud"
+    unit: "%"
+    notes: "Slightly stronger diurnal structure than high clouds from afternoon convection. ACF decays quickly."
+  low_cloud_cover_low_cld_lay:
+    label: "Cloud Cover (low)"
+    group: "Cloud"
+    unit: "%"
+    notes: "Stratus/fog shows persistent overnight ACF from nocturnal radiation cooling, burns off mid-morning."
+  shortwave_radiation_backwards_sfc:
+    label: "Shortwave Radiation"
+    group: "Radiation"
+    unit: "W/m²"
+    notes: "Textbook diurnal sine wave (peaks at lag 24 with r≈0.995 and lag 48). Primary causal driver of solar generation."
+  wind_speed_10_m_above_gnd:
+    label: "Wind Speed (10 m)"
+    group: "Wind"
+    unit: "m/s"
+    notes: "Moderate 24h periodicity from sea-breeze. PACF cuts off at lag 3 → low-order AR process."
+  wind_direction_10_m_above_gnd:
+    label: "Wind Direction (10 m)"
+    group: "Wind"
+    unit: "°"
+    notes: "Circular variable (0-360°) (ACF/PACF interpreted cautiously). Sea-breeze rotation near lag 24."
+  wind_speed_80_m_above_gnd:
+    label: "Wind Speed (80 m)"
+    group: "Wind"
+    unit: "m/s"
+    notes: "Stronger persistence than 10m from reduced surface friction. Smoother diurnal cycle."
+  wind_direction_80_m_above_gnd:
+    label: "Wind Direction (80 m)"
+    group: "Wind"
+    unit: "°"
+    notes: "Circular variable. Less influenced by surface obstacles (cleaner but noisy diurnal signal)."
+  wind_speed_900_mb:
+    label: "Wind Speed (900 mb)"
+    group: "Wind"
+    unit: "m/s"
+    notes: "Upper-level (~1km) wind shows weaker diurnal variation and stronger synoptic-scale persistence."
+  wind_direction_900_mb:
+    label: "Wind Direction (900 mb)"
+    group: "Wind"
+    unit: "°"
+    notes: "Reflects synoptic steering flow. Circular variable (less diurnally driven)."
+  wind_gust_10_m_above_gnd:
+    label: "Wind Gust (10 m)"
+    group: "Wind"
+    unit: "m/s"
+    notes: "Closely coupled to 10m wind (similar ACF) but higher variance and faster decorrelation from turbulent gusting."
+  angle_of_incidence:
+    label: "Angle of Incidence"
+    group: "Solar Geometry"
+    unit: "°"
+    notes: "Geometrically determined (near-perfect 24h ACF). Clean AR(2) PACF cut-off identical to shortwave radiation."
+  zenith:
+    label: "Zenith Angle"
+    group: "Solar Geometry"
+    unit: "°"
+    notes: "Purely deterministic astronomical quantity. ACF is a cosine wave with period 24h. Zero stochastic component."
+  azimuth:
+    label: "Azimuth"
+    group: "Solar Geometry"
+    unit: "°"
+    notes: "Sweeps east→west every 24h. Circular nature (0°/360° wrap-around) may cause PACF numerical instability."
+
+# Variable pairs for the cointegration and Granger-causality tests. Each list is
+# either explicit, or `auto`: the `auto_top_k` most correlated driver pairs
+# (|Pearson r|), Granger in both directions. Pairs naming a column that is not
+# in the file are skipped.
+pairs:
+  auto_top_k: 12
+  cointegration:
+    - [shortwave_radiation_backwards_sfc, temperature_2_m_above_gnd]
+    - [shortwave_radiation_backwards_sfc, relative_humidity_2_m_above_gnd]
+    - [temperature_2_m_above_gnd, relative_humidity_2_m_above_gnd]
+    - [wind_speed_10_m_above_gnd, wind_speed_80_m_above_gnd]
+    - [wind_speed_80_m_above_gnd, wind_speed_900_mb]
+    - [wind_speed_10_m_above_gnd, wind_gust_10_m_above_gnd]
+    - [total_cloud_cover_sfc, shortwave_radiation_backwards_sfc]
+    - [total_cloud_cover_sfc, temperature_2_m_above_gnd]
+    - [zenith, angle_of_incidence]
+    - [zenith, shortwave_radiation_backwards_sfc]
+    - [mean_sea_level_pressure_MSL, wind_speed_10_m_above_gnd]
+    - [total_cloud_cover_sfc, high_cloud_cover_high_cld_lay]
+    - [wind_direction_10_m_above_gnd, wind_direction_80_m_above_gnd]
+  granger:                     # [cause, effect]
+    - [shortwave_radiation_backwards_sfc, temperature_2_m_above_gnd]
+    - [shortwave_radiation_backwards_sfc, relative_humidity_2_m_above_gnd]
+    - [shortwave_radiation_backwards_sfc, total_cloud_cover_sfc]
+    - [temperature_2_m_above_gnd, relative_humidity_2_m_above_gnd]
+    - [wind_speed_10_m_above_gnd, wind_gust_10_m_above_gnd]
+    - [wind_speed_80_m_above_gnd, wind_gust_10_m_above_gnd]
+    - [total_cloud_cover_sfc, shortwave_radiation_backwards_sfc]
+    - [zenith, shortwave_radiation_backwards_sfc]
+    - [zenith, angle_of_incidence]
+    - [mean_sea_level_pressure_MSL, wind_speed_10_m_above_gnd]
+    - [temperature_2_m_above_gnd, shortwave_radiation_backwards_sfc]
+    - [relative_humidity_2_m_above_gnd, total_precipitation_sfc]
+    - [wind_speed_10_m_above_gnd, wind_speed_80_m_above_gnd]
+    - [angle_of_incidence, shortwave_radiation_backwards_sfc]

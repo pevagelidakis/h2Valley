@@ -31,8 +31,6 @@ no refit, no wait — while the (slower) future-projection horizon slider
 still simulates on demand from the same cached fitted model.
 """
 
-from pathlib import Path
-from datetime import datetime
 import threading
 import time
 import warnings
@@ -48,6 +46,7 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 from statsmodels.tsa.statespace.initialization import Initialization
 
 from cache_utils import make_signature, load_cache, save_cache
+from core.dataset import get_dataset
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  DESIGN TOKENS  (kept in sync with app.py — do not edit independently)
@@ -69,103 +68,25 @@ AMBER    = "#f5a623"
 SYN_C    = "#7eb3ff"
 FONT_MONO = "'IBM Plex Mono','Fira Code',monospace"
 
-CSV_PATH = Path("data/spg.csv")
+DS = get_dataset()
+CSV_PATH = DS.path
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  VARIABLE CATALOGUE  (kept in sync with app.py — do not edit independently)
+#  VARIABLE CATALOGUE  —  from the dataset config (configs/*.yaml via
+#  core.dataset); edit the config, not this file, to change it.
 # ─────────────────────────────────────────────────────────────────────────────
-COLS = [
-    "temperature_2_m_above_gnd", "relative_humidity_2_m_above_gnd",
-    "mean_sea_level_pressure_MSL", "total_precipitation_sfc",
-    "snowfall_amount_sfc", "total_cloud_cover_sfc",
-    "high_cloud_cover_high_cld_lay", "medium_cloud_cover_mid_cld_lay",
-    "low_cloud_cover_low_cld_lay", "shortwave_radiation_backwards_sfc",
-    "wind_speed_10_m_above_gnd", "wind_direction_10_m_above_gnd",
-    "wind_speed_80_m_above_gnd", "wind_direction_80_m_above_gnd",
-    "wind_speed_900_mb", "wind_direction_900_mb",
-    "wind_gust_10_m_above_gnd", "angle_of_incidence", "zenith", "azimuth",
-]
+COLS   = DS.columns()
+LABELS = DS.labels
+COLORS = DS.colors
+UNITS  = DS.units
 
-LABELS = {
-    "temperature_2_m_above_gnd":        "Temperature (2 m)",
-    "relative_humidity_2_m_above_gnd":  "Relative Humidity (2 m)",
-    "mean_sea_level_pressure_MSL":      "Sea-level Pressure",
-    "total_precipitation_sfc":          "Total Precipitation",
-    "snowfall_amount_sfc":              "Snowfall",
-    "total_cloud_cover_sfc":            "Cloud Cover (total)",
-    "high_cloud_cover_high_cld_lay":    "Cloud Cover (high)",
-    "medium_cloud_cover_mid_cld_lay":   "Cloud Cover (medium)",
-    "low_cloud_cover_low_cld_lay":      "Cloud Cover (low)",
-    "shortwave_radiation_backwards_sfc":"Shortwave Radiation",
-    "wind_speed_10_m_above_gnd":        "Wind Speed (10 m)",
-    "wind_direction_10_m_above_gnd":    "Wind Direction (10 m)",
-    "wind_speed_80_m_above_gnd":        "Wind Speed (80 m)",
-    "wind_direction_80_m_above_gnd":    "Wind Direction (80 m)",
-    "wind_speed_900_mb":                "Wind Speed (900 mb)",
-    "wind_direction_900_mb":            "Wind Direction (900 mb)",
-    "wind_gust_10_m_above_gnd":         "Wind Gust (10 m)",
-    "angle_of_incidence":               "Angle of Incidence",
-    "zenith":                           "Zenith Angle",
-    "azimuth":                          "Azimuth",
-}
-
-# hex colours per variable (subset of app.py's GROUPS colour assignment)
-COLORS = {
-    "temperature_2_m_above_gnd":        "#f07040",
-    "relative_humidity_2_m_above_gnd":  "#34c9a0",
-    "mean_sea_level_pressure_MSL":      "#a78bfa",
-    "total_precipitation_sfc":          "#60a5fa",
-    "snowfall_amount_sfc":              "#60a5fa",
-    "total_cloud_cover_sfc":            "#94a3b8",
-    "high_cloud_cover_high_cld_lay":    "#94a3b8",
-    "medium_cloud_cover_mid_cld_lay":   "#94a3b8",
-    "low_cloud_cover_low_cld_lay":      "#94a3b8",
-    "shortwave_radiation_backwards_sfc":"#fbbf24",
-    "wind_speed_10_m_above_gnd":        "#34d399",
-    "wind_direction_10_m_above_gnd":    "#34d399",
-    "wind_speed_80_m_above_gnd":        "#34d399",
-    "wind_direction_80_m_above_gnd":    "#34d399",
-    "wind_speed_900_mb":                "#34d399",
-    "wind_direction_900_mb":            "#34d399",
-    "wind_gust_10_m_above_gnd":         "#34d399",
-    "angle_of_incidence":               "#fbbf24",
-    "zenith":                           "#fbbf24",
-    "azimuth":                          "#fbbf24",
-}
-
-UNITS = {
-    "temperature_2_m_above_gnd":        "°C",
-    "relative_humidity_2_m_above_gnd":  "%",
-    "mean_sea_level_pressure_MSL":      "hPa",
-    "total_precipitation_sfc":          "mm",
-    "snowfall_amount_sfc":              "cm",
-    "total_cloud_cover_sfc":            "%",
-    "high_cloud_cover_high_cld_lay":    "%",
-    "medium_cloud_cover_mid_cld_lay":   "%",
-    "low_cloud_cover_low_cld_lay":      "%",
-    "shortwave_radiation_backwards_sfc":"W/m²",
-    "wind_speed_10_m_above_gnd":        "m/s",
-    "wind_direction_10_m_above_gnd":    "°",
-    "wind_speed_80_m_above_gnd":        "m/s",
-    "wind_direction_80_m_above_gnd":    "°",
-    "wind_speed_900_mb":                "m/s",
-    "wind_direction_900_mb":            "°",
-    "wind_gust_10_m_above_gnd":         "m/s",
-    "angle_of_incidence":               "°",
-    "zenith":                           "°",
-    "azimuth":                          "°",
-}
-
-DEFAULT_COL = "temperature_2_m_above_gnd"
+DEFAULT_COL = DS.default_variable()
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  DATA  (independent load, mirrors app.py's load_data())
+#  DATA  (shared loader: core.dataset)
 # ─────────────────────────────────────────────────────────────────────────────
 def _load_df() -> pd.DataFrame:
-    df = pd.read_csv(CSV_PATH)
-    end_date = datetime.today().replace(minute=0, second=0, microsecond=0)
-    df["date"] = pd.date_range(end=end_date, periods=len(df), freq="h")
-    return df.set_index("date")
+    return DS.frame()          # time-indexed, built once per process
 
 _RAW = _load_df()
 AVAILABLE = [c for c in COLS if c in _RAW.columns]

@@ -42,8 +42,6 @@ import time — the variable on screen is always processed first — and are
 persisted to disk via cache_utils, so a later run loads them instantly.
 """
 
-from pathlib import Path
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import threading
@@ -58,6 +56,7 @@ from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
 
 from cache_utils import make_signature, load_cache, save_cache
+from core.dataset import get_dataset
 import synth3_funs as S3
 from synth3_funs import (zscore, identify_embedding, twin_scan, twin_model, twin_surrogate,
                          genda_train, genda_generate, dynamical_profile, distances_to_real,
@@ -89,73 +88,18 @@ TS_FILL  = "rgba(56,189,248,0.15)"
 GD_FILL  = "rgba(192,132,252,0.15)"
 METHOD_STYLE = {"ts": ("Twin Surrogates", TS_C, TS_FILL), "gd": ("GENDA", GD_C, GD_FILL)}
 
-CSV_PATH = Path("data/spg.csv")
+DS = get_dataset()
+CSV_PATH = DS.path
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  VARIABLE CATALOGUE  —  every column of spg.csv, including the PV target
+#  VARIABLE CATALOGUE  —  from the dataset config (configs/*.yaml via
+#  core.dataset); edit the config, not this file, to change it.
 # ─────────────────────────────────────────────────────────────────────────────
-COLS = [
-    "generated_power_kw",
-    "temperature_2_m_above_gnd", "relative_humidity_2_m_above_gnd",
-    "mean_sea_level_pressure_MSL", "total_precipitation_sfc",
-    "snowfall_amount_sfc", "total_cloud_cover_sfc",
-    "high_cloud_cover_high_cld_lay", "medium_cloud_cover_mid_cld_lay",
-    "low_cloud_cover_low_cld_lay", "shortwave_radiation_backwards_sfc",
-    "wind_speed_10_m_above_gnd", "wind_direction_10_m_above_gnd",
-    "wind_speed_80_m_above_gnd", "wind_direction_80_m_above_gnd",
-    "wind_speed_900_mb", "wind_direction_900_mb",
-    "wind_gust_10_m_above_gnd", "angle_of_incidence", "zenith", "azimuth",
-]
+COLS   = DS.columns(include_target=True)   # the target too (first)
+LABELS = DS.labels
+UNITS  = DS.units
 
-LABELS = {
-    "generated_power_kw":               "Generated Power (PV target)",
-    "temperature_2_m_above_gnd":        "Temperature (2 m)",
-    "relative_humidity_2_m_above_gnd":  "Relative Humidity (2 m)",
-    "mean_sea_level_pressure_MSL":      "Sea-level Pressure",
-    "total_precipitation_sfc":          "Total Precipitation",
-    "snowfall_amount_sfc":              "Snowfall",
-    "total_cloud_cover_sfc":            "Cloud Cover (total)",
-    "high_cloud_cover_high_cld_lay":    "Cloud Cover (high)",
-    "medium_cloud_cover_mid_cld_lay":   "Cloud Cover (medium)",
-    "low_cloud_cover_low_cld_lay":      "Cloud Cover (low)",
-    "shortwave_radiation_backwards_sfc":"Shortwave Radiation",
-    "wind_speed_10_m_above_gnd":        "Wind Speed (10 m)",
-    "wind_direction_10_m_above_gnd":    "Wind Direction (10 m)",
-    "wind_speed_80_m_above_gnd":        "Wind Speed (80 m)",
-    "wind_direction_80_m_above_gnd":    "Wind Direction (80 m)",
-    "wind_speed_900_mb":                "Wind Speed (900 mb)",
-    "wind_direction_900_mb":            "Wind Direction (900 mb)",
-    "wind_gust_10_m_above_gnd":         "Wind Gust (10 m)",
-    "angle_of_incidence":               "Angle of Incidence",
-    "zenith":                           "Zenith Angle",
-    "azimuth":                          "Azimuth",
-}
-
-UNITS = {
-    "generated_power_kw":               "kW",
-    "temperature_2_m_above_gnd":        "°C",
-    "relative_humidity_2_m_above_gnd":  "%",
-    "mean_sea_level_pressure_MSL":      "hPa",
-    "total_precipitation_sfc":          "mm",
-    "snowfall_amount_sfc":              "cm",
-    "total_cloud_cover_sfc":            "%",
-    "high_cloud_cover_high_cld_lay":    "%",
-    "medium_cloud_cover_mid_cld_lay":   "%",
-    "low_cloud_cover_low_cld_lay":      "%",
-    "shortwave_radiation_backwards_sfc":"W/m²",
-    "wind_speed_10_m_above_gnd":        "m/s",
-    "wind_direction_10_m_above_gnd":    "°",
-    "wind_speed_80_m_above_gnd":        "m/s",
-    "wind_direction_80_m_above_gnd":    "°",
-    "wind_speed_900_mb":                "m/s",
-    "wind_direction_900_mb":            "°",
-    "wind_gust_10_m_above_gnd":         "m/s",
-    "angle_of_incidence":               "°",
-    "zenith":                           "°",
-    "azimuth":                          "°",
-}
-
-DEFAULT_COL   = "generated_power_kw"
+DEFAULT_COL   = DS.target or DS.default_variable()
 N_REALS_MAX   = 8
 N_REALS_DEF   = 4
 TS_RR_MIN, TS_RR_MAX = 2, 15
@@ -163,13 +107,10 @@ K_MIN, K_MAX  = 2, 6
 GENDA_THREADS = 4          # torch intra-op threads for background training
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  DATA  (independent load, mirrors app.py's load_data())
+#  DATA  (shared loader: core.dataset)
 # ─────────────────────────────────────────────────────────────────────────────
 def _load_df() -> pd.DataFrame:
-    df = pd.read_csv(CSV_PATH)
-    end_date = datetime.today().replace(minute=0, second=0, microsecond=0)
-    df["date"] = pd.date_range(end=end_date, periods=len(df), freq="h")
-    return df.set_index("date")
+    return DS.frame()          # time-indexed, built once per process
 
 
 _RAW = _load_df()

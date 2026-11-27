@@ -9,7 +9,6 @@ except Exception:
 import math
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from statsmodels.tsa.stattools import (
     adfuller, kpss, zivot_andrews,
     acf, pacf,
@@ -23,7 +22,6 @@ from statsmodels.stats.stattools import durbin_watson
 import statsmodels.api as sm
 from statsmodels.tsa.ar_model import AutoReg
 from scipy import stats as sp_stats
-from datetime import datetime
 
 from arch.unitroot import PhillipsPerron
 import plotly.graph_objects as go
@@ -37,11 +35,13 @@ from synth2_tab import tab_synth2, register_synth2_callbacks
 from rqa_tab import tab_rqa, register_rqa_callbacks
 from synth3_tab import tab_synth3, register_synth3_callbacks
 from cache_utils import make_signature, load_cache, save_cache
+from core.dataset import get_dataset
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
-CSV_PATH    = Path("data/spg.csv")
+DS          = get_dataset()   # active dataset: $H2V_DATASET or configs/spg.yaml
+CSV_PATH    = DS.path
 NLAGS       = 48
 THRES       = 0.05
 MAX_LAG_GC  = 6
@@ -50,119 +50,15 @@ LB_LAGS     = [6, 12, 24]   # lags for Ljung-Box
 HQC_MAX_LAG = 12            # max AR order for HQC search
 BG_LAGS     = 12            # Breusch-Godfrey: test serial correlation up to this lag
 
-COLS = [
-    "temperature_2_m_above_gnd", "relative_humidity_2_m_above_gnd",
-    "mean_sea_level_pressure_MSL", "total_precipitation_sfc",
-    "snowfall_amount_sfc", "total_cloud_cover_sfc",
-    "high_cloud_cover_high_cld_lay", "medium_cloud_cover_mid_cld_lay",
-    "low_cloud_cover_low_cld_lay", "shortwave_radiation_backwards_sfc",
-    "wind_speed_10_m_above_gnd", "wind_direction_10_m_above_gnd",
-    "wind_speed_80_m_above_gnd", "wind_direction_80_m_above_gnd",
-    "wind_speed_900_mb", "wind_direction_900_mb",
-    "wind_gust_10_m_above_gnd", "angle_of_incidence", "zenith", "azimuth",
-]
-
-LABELS = {
-    "temperature_2_m_above_gnd":        "Temperature (2 m)",
-    "relative_humidity_2_m_above_gnd":  "Relative Humidity (2 m)",
-    "mean_sea_level_pressure_MSL":      "Sea-level Pressure",
-    "total_precipitation_sfc":          "Total Precipitation",
-    "snowfall_amount_sfc":              "Snowfall",
-    "total_cloud_cover_sfc":            "Cloud Cover (total)",
-    "high_cloud_cover_high_cld_lay":    "Cloud Cover (high)",
-    "medium_cloud_cover_mid_cld_lay":   "Cloud Cover (medium)",
-    "low_cloud_cover_low_cld_lay":      "Cloud Cover (low)",
-    "shortwave_radiation_backwards_sfc":"Shortwave Radiation",
-    "wind_speed_10_m_above_gnd":        "Wind Speed (10 m)",
-    "wind_direction_10_m_above_gnd":    "Wind Direction (10 m)",
-    "wind_speed_80_m_above_gnd":        "Wind Speed (80 m)",
-    "wind_direction_80_m_above_gnd":    "Wind Direction (80 m)",
-    "wind_speed_900_mb":                "Wind Speed (900 mb)",
-    "wind_direction_900_mb":            "Wind Direction (900 mb)",
-    "wind_gust_10_m_above_gnd":         "Wind Gust (10 m)",
-    "angle_of_incidence":               "Angle of Incidence",
-    "zenith":                           "Zenith Angle",
-    "azimuth":                          "Azimuth",
-}
-
-GROUPS = {
-    "temperature_2_m_above_gnd":        ("Temperature",    "#f07040"),
-    "relative_humidity_2_m_above_gnd":  ("Humidity",       "#34c9a0"),
-    "mean_sea_level_pressure_MSL":      ("Pressure",       "#a78bfa"),
-    "total_precipitation_sfc":          ("Precipitation",  "#60a5fa"),
-    "snowfall_amount_sfc":              ("Precipitation",  "#60a5fa"),
-    "total_cloud_cover_sfc":            ("Cloud",          "#94a3b8"),
-    "high_cloud_cover_high_cld_lay":    ("Cloud",          "#94a3b8"),
-    "medium_cloud_cover_mid_cld_lay":   ("Cloud",          "#94a3b8"),
-    "low_cloud_cover_low_cld_lay":      ("Cloud",          "#94a3b8"),
-    "shortwave_radiation_backwards_sfc":("Radiation",      "#fbbf24"),
-    "wind_speed_10_m_above_gnd":        ("Wind",           "#34d399"),
-    "wind_direction_10_m_above_gnd":    ("Wind",           "#34d399"),
-    "wind_speed_80_m_above_gnd":        ("Wind",           "#34d399"),
-    "wind_direction_80_m_above_gnd":    ("Wind",           "#34d399"),
-    "wind_speed_900_mb":                ("Wind",           "#34d399"),
-    "wind_direction_900_mb":            ("Wind",           "#34d399"),
-    "wind_gust_10_m_above_gnd":         ("Wind",           "#34d399"),
-    "angle_of_incidence":               ("Solar Geometry", "#fbbf24"),
-    "zenith":                           ("Solar Geometry", "#fbbf24"),
-    "azimuth":                          ("Solar Geometry", "#fbbf24"),
-}
-
-INSIGHTS = {
-    "temperature_2_m_above_gnd":        "Sinusoidal ACF peaking at lag 12. Diurnal heating cycle dominates. PACF cuts off after lag 12 → AR(12) residual structure.",
-    "relative_humidity_2_m_above_gnd":  "Mirror of temperature (peaks overnight), troughs mid-afternoon. Strong 24h period. PACF cuts off after lag 13 → AR(13).",
-    "mean_sea_level_pressure_MSL":      "Weak semi-diurnal (~12h) tidal oscillation on synoptic variability. PACF shows peaks at lags 31.",
-    "total_precipitation_sfc":          "Near-zero ACF at all lags (highly intermittent). Near-white-noise at hourly resolution. Essentially unpredictable beyond lag 1.",
-    "snowfall_amount_sfc":              "Highly sparse with near-zero ACF. Rare, episodic events dominated by synoptic patterns over days.",
-    "total_cloud_cover_sfc":            "Moderate 24h cycle from sea-breeze and convective patterns. PACF cuts off ~lag 3. Explains cloud cover failure in Granger tests.",
-    "high_cloud_cover_high_cld_lay":    "Weaker ACF than total cloud: cirrus driven by upper-tropospheric dynamics independent of surface diurnal cycles.",
-    "medium_cloud_cover_mid_cld_lay":   "Slightly stronger diurnal structure than high clouds from afternoon convection. ACF decays quickly.",
-    "low_cloud_cover_low_cld_lay":      "Stratus/fog shows persistent overnight ACF from nocturnal radiation cooling, burns off mid-morning.",
-    "shortwave_radiation_backwards_sfc":"Textbook diurnal sine wave (peaks at lag 24 with r≈0.995 and lag 48). Primary causal driver of solar generation.",
-    "wind_speed_10_m_above_gnd":        "Moderate 24h periodicity from sea-breeze. PACF cuts off at lag 3 → low-order AR process.",
-    "wind_direction_10_m_above_gnd":    "Circular variable (0-360°) (ACF/PACF interpreted cautiously). Sea-breeze rotation near lag 24.",
-    "wind_speed_80_m_above_gnd":        "Stronger persistence than 10m from reduced surface friction. Smoother diurnal cycle.",
-    "wind_direction_80_m_above_gnd":    "Circular variable. Less influenced by surface obstacles (cleaner but noisy diurnal signal).",
-    "wind_speed_900_mb":                "Upper-level (~1km) wind shows weaker diurnal variation and stronger synoptic-scale persistence.",
-    "wind_direction_900_mb":            "Reflects synoptic steering flow. Circular variable (less diurnally driven).",
-    "wind_gust_10_m_above_gnd":         "Closely coupled to 10m wind (similar ACF) but higher variance and faster decorrelation from turbulent gusting.",
-    "angle_of_incidence":               "Geometrically determined (near-perfect 24h ACF). Clean AR(2) PACF cut-off identical to shortwave radiation.",
-    "zenith":                           "Purely deterministic astronomical quantity. ACF is a cosine wave with period 24h. Zero stochastic component.",
-    "azimuth":                          "Sweeps east→west every 24h. Circular nature (0°/360° wrap-around) may cause PACF numerical instability.",
-}
-
-COINT_PAIRS = [
-    ("shortwave_radiation_backwards_sfc", "temperature_2_m_above_gnd"),
-    ("shortwave_radiation_backwards_sfc", "relative_humidity_2_m_above_gnd"),
-    ("temperature_2_m_above_gnd",         "relative_humidity_2_m_above_gnd"),
-    ("wind_speed_10_m_above_gnd",         "wind_speed_80_m_above_gnd"),
-    ("wind_speed_80_m_above_gnd",         "wind_speed_900_mb"),
-    ("wind_speed_10_m_above_gnd",         "wind_gust_10_m_above_gnd"),
-    ("total_cloud_cover_sfc",             "shortwave_radiation_backwards_sfc"),
-    ("total_cloud_cover_sfc",             "temperature_2_m_above_gnd"),
-    ("zenith",                            "angle_of_incidence"),
-    ("zenith",                            "shortwave_radiation_backwards_sfc"),
-    ("mean_sea_level_pressure_MSL",       "wind_speed_10_m_above_gnd"),
-    ("total_cloud_cover_sfc",             "high_cloud_cover_high_cld_lay"),
-    ("wind_direction_10_m_above_gnd",     "wind_direction_80_m_above_gnd"),
-]
-
-GRANGER_PAIRS = [
-    ("shortwave_radiation_backwards_sfc", "temperature_2_m_above_gnd"),
-    ("shortwave_radiation_backwards_sfc", "relative_humidity_2_m_above_gnd"),
-    ("shortwave_radiation_backwards_sfc", "total_cloud_cover_sfc"),
-    ("temperature_2_m_above_gnd",         "relative_humidity_2_m_above_gnd"),
-    ("wind_speed_10_m_above_gnd",         "wind_gust_10_m_above_gnd"),
-    ("wind_speed_80_m_above_gnd",         "wind_gust_10_m_above_gnd"),
-    ("total_cloud_cover_sfc",             "shortwave_radiation_backwards_sfc"),
-    ("zenith",                            "shortwave_radiation_backwards_sfc"),
-    ("zenith",                            "angle_of_incidence"),
-    ("mean_sea_level_pressure_MSL",       "wind_speed_10_m_above_gnd"),
-    ("temperature_2_m_above_gnd",         "shortwave_radiation_backwards_sfc"),
-    ("relative_humidity_2_m_above_gnd",   "total_precipitation_sfc"),
-    ("wind_speed_10_m_above_gnd",         "wind_speed_80_m_above_gnd"),
-    ("angle_of_incidence",                "shortwave_radiation_backwards_sfc"),
-]
+# Variable catalogue, per-variable notes and the tested pairs all come from
+# the dataset config (configs/*.yaml via core.dataset), so nothing below is
+# specific to one input file. Pairs naming absent columns are skipped there.
+COLS          = DS.columns()
+LABELS        = DS.labels
+GROUPS        = DS.group_of          # col -> (group, colour)
+INSIGHTS      = DS.notes             # hand-written; only where the config has them
+COINT_PAIRS   = DS.pairs("cointegration")
+GRANGER_PAIRS = DS.pairs("granger")  # (cause, effect)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  DESIGN TOKENS
@@ -225,18 +121,8 @@ def sf(v):
 #  DATA LOADING & PRECOMPUTATION
 # ─────────────────────────────────────────────────────────────────────────────
 def load_data():
-    if not CSV_PATH.exists():
-        raise FileNotFoundError(f"WARNING: {CSV_PATH} not found: generating synthetic demo data")
-
-    print("Loading data …")
-    df = pd.read_csv(CSV_PATH)
-    # The series is hourly (diurnal cycles at lag 24, axes labelled "lag (hours)"),
-    # so stamp an hourly DatetimeIndex. `periods=` guarantees the index length
-    # matches the number of rows regardless of any end/start rounding.
-    end_date = datetime.today().replace(minute=0, second=0, microsecond=0)
-    df["date"] = pd.date_range(end=end_date, periods=len(df), freq="h")
-    df = df.set_index("date")
-    return df
+    # Path, timestamps and frequency are handled by the dataset spec.
+    return DS.frame()
 
 print("Initialising …")
 _df_raw  = load_data()
@@ -526,7 +412,7 @@ _PRECOMPUTE_SIG = make_signature(
     nlags=NLAGS, thres=THRES, max_lag_gc=MAX_LAG_GC,
     lb_lags=LB_LAGS, hqc_max_lag=HQC_MAX_LAG, bg_lags=BG_LAGS,
     coint_pairs=COINT_PAIRS, granger_pairs=GRANGER_PAIRS,
-    available=AVAILABLE,
+    available=AVAILABLE, labels={c: LABELS[c] for c in AVAILABLE},
 )
 _cached_precompute = load_cache("app_precompute", _PRECOMPUTE_SIG)
 if _cached_precompute is not None:

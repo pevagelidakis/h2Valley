@@ -8,6 +8,7 @@ statsmodels==0.14.6
 arch==8.0.0
 openpyxl==3.1.5
 scikit-learn==1.7.2
+PyYAML==6.0.3
 gunicorn==23.0.0
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.14.1

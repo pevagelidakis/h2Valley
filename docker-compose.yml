@@ -8,6 +8,8 @@ services:
     restart: unless-stopped
     expose:
       - "7860"
+    environment:
+      H2V_DATASET: ${H2V_DATASET:-configs/spg.yaml}   # which dataset config to analyse
     volumes:
       - app_cache:/home/app/h2valley/.cache   # keeps precompute results across restarts
 
