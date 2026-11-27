@@ -16,8 +16,8 @@ RUN pip install -r requirements.txt
 # the container. Instead docker-compose mounts a named volume at .cache/, so
 # the first start computes everything once and later restarts/rebuilds reuse it.
 COPY --chown=app:app . .
-# Create .cache owned by `app` so the named volume inherits writable ownership.
-RUN mkdir -p .cache && chown app:app .cache
+# Create .cache and results/ owned by `app` so the named volumes inherit writable ownership.
+RUN mkdir -p .cache results && chown app:app .cache results
 USER app
 
 # One BLAS/OpenMP thread per Python thread. The app runs 4-5 precompute

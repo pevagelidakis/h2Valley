@@ -45,7 +45,9 @@ from statsmodels.tsa.stattools import adfuller, acf, pacf
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from statsmodels.tsa.statespace.initialization import Initialization
 
-from cache_utils import make_signature, load_cache, save_cache
+from collections import OrderedDict
+from cache_utils import make_signature, remove_cache
+from core.results import ResultStore
 from core.dataset import get_dataset
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -138,7 +140,8 @@ def _squeeze(sim_out):
 #  Run once per variable, eagerly, for every column — see the precompute
 #  loop below that fills SYNTHETIC_TENSOR.
 # ─────────────────────────────────────────────────────────────────────────────
-N_VALIDATION = 6   # realizations per variable stored in SYNTHETIC_TENSOR
+N_VALIDATION = 32  # realisations per variable stored (the "realisation bank")
+N_SHOW_MAX   = 8   # most realisations drawn at once in the overlay (browser payload)
 
 # Fitting is done on the *standardized* series z = (y - mean)/std.  This is a
 # pure numerical-conditioning fix: series like sea-level pressure (values
@@ -368,10 +371,12 @@ def _fit_model(col: str) -> dict:
     if bic_best is not best and (bic_best["aicc"] - best["aicc"]) <= 2.0:
         selected = bic_best
 
-    res = selected.get("res")
+    res, fit_note = selected.get("res"), selected["note"]
     if res is None:                          # pruned in a tie — refit the winner once
-        res, _ = _try_fit(z, selected["order"], selected["seasonal"])
-    # keep the fitted-results object only for the selected model (memory)
+        res, fit_note = _try_fit(z, selected["order"], selected["seasonal"])
+    # Only the parameters are kept: the fitted-results object (which carries
+    # the data and the whole Kalman-filter state) is rebuilt from them on
+    # demand by _results(), so nothing large is stored or held in memory.
     order_search = [{kk: r[kk] for kk in ("order", "seasonal", "aic", "bic", "aicc", "note")}
                     for r in fitted]
     aic_winner = min(fitted, key=lambda r: r["aicc"])
@@ -386,19 +391,62 @@ def _fit_model(col: str) -> dict:
         best_aic=selected["aic"], best_bic=selected["bic"], best_aicc=selected["aicc"],
         aic_winner=(aic_winner["order"], aic_winner["seasonal"]),
         bic_winner=(bic_winner["order"], bic_winner["seasonal"]),
-        res=res,
+        params=np.asarray(res.params, dtype=float).tolist(),
+        fit_enforce=(fit_note != "relaxed"),     # which constraints the fit used
     )
-    m.update(_validation_ensemble(m))
+    _remember_results(col, res)
+    m.update(_validation_ensemble(m, res))
     return m
 
 
-def _validation_ensemble(m: dict) -> dict:
+# ─────────────────────────────────────────────────────────────────────────────
+#  FITTED MODELS FROM PARAMETERS
+#  A model is stored as (orders, coefficients, constraint flag). Running the
+#  Kalman filter once with those coefficients reproduces the fitted-results
+#  object exactly — same likelihood, same filtered state, same simulations —
+#  in well under a second, with no optimisation. A few are kept in memory.
+# ─────────────────────────────────────────────────────────────────────────────
+_RES_CACHE: "OrderedDict[str, object]" = OrderedDict()
+_RES_LOCK = threading.Lock()
+_RES_KEEP = 4
+
+
+def _remember_results(col, res):
+    with _RES_LOCK:
+        _RES_CACHE[col] = res
+        _RES_CACHE.move_to_end(col)
+        while len(_RES_CACHE) > _RES_KEEP:
+            _RES_CACHE.popitem(last=False)
+
+
+def rebuild_results(m: dict):
+    """The SARIMAX results object for model dict `m`, from its parameters."""
+    z = (m["y"] - m["mu_y"]) / m["sd_y"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mod = SARIMAX(z, order=tuple(m["best_order"]), seasonal_order=tuple(m["best_seasonal"]),
+                      enforce_stationarity=m["fit_enforce"],
+                      enforce_invertibility=m["fit_enforce"], **_FIT_KW)
+        return mod.filter(np.asarray(m["params"], dtype=float))
+
+
+def _results(m: dict):
+    with _RES_LOCK:
+        res = _RES_CACHE.get(m["col"])
+    if res is None:
+        res = rebuild_results(m)
+        _remember_results(m["col"], res)
+    return res
+
+
+def _validation_ensemble(m: dict, res=None) -> dict:
     """The N_VALIDATION alternate-history realisations of a fitted model and
     their shape statistics (ACF/PACF, moments) against the real series.
-    Separate from fitting so cached fits can be re-simulated cheaply."""
+    Separate from fitting so stored fits can be re-simulated cheaply."""
     y, n, mu_y, sd_y = m["y"], m["n"], m["mu_y"], m["sd_y"]
     z = (y - mu_y) / sd_y
-    z_sims, sim_method, burn_in = simulate_unconditional(m["res"], z, n, N_VALIDATION, seed=42)
+    z_sims, sim_method, burn_in = simulate_unconditional(res if res is not None else _results(m),
+                                                         z, n, N_VALIDATION, seed=42)
     z_sims = np.nan_to_num(z_sims, nan=0.0, posinf=0.0, neginf=0.0)
     valid_sims = z_sims * sd_y + mu_y            # back to physical units
     nlags_view = min(DS.lag(2), n // 4)
@@ -420,20 +468,26 @@ def _validation_ensemble(m: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  EAGER PRECOMPUTE  —  fit every variable once and stack its shape-validation
-#  ensemble into one shared tensor:
+#  EAGER PRECOMPUTE  —  fit every variable once and stack its realisation
+#  bank into one shared in-memory tensor:
 #
 #      SYNTHETIC_TENSOR.shape == (observations, features, realizations)
 #
 #  "features" indexes variables (order given by FEATURE_INDEX); "realizations"
-#  indexes independent applications of the generation method — i.e. the
-#  N_VALIDATION independent stochastic draws simulated from each variable's
-#  fitted SARIMA model. Once this loop finishes, selecting a variable in the
-#  dropdown is a pure index lookup: SYNTHETIC_TENSOR[:, FEATURE_INDEX[col], :].
+#  indexes the N_VALIDATION independent stochastic draws simulated from each
+#  variable's fitted SARIMA model. Selecting a variable in the dropdown is a
+#  pure index lookup: SYNTHETIC_TENSOR[:, FEATURE_INDEX[col], :].
+#
+#  Persistence (results/<dataset>/synth_sarima/, via core.results):
+#      models.json            per variable: orders, coefficients, periodogram,
+#                             order search, moments  (a few KB each)
+#      realisations.parquet   the realisation bank: t, realisation, <variables> (float32)
+#      validation.parquet     ACF/PACF of the real series and of every realisation
+#  No fitted Python objects are stored; they are rebuilt from the coefficients.
 # ─────────────────────────────────────────────────────────────────────────────
 FEATURE_INDEX = {c: i for i, c in enumerate(AVAILABLE)}
 N_OBS = len(DF)
-SYNTHETIC_TENSOR = np.full((N_OBS, len(AVAILABLE), N_VALIDATION), np.nan, dtype=float)
+SYNTHETIC_TENSOR = np.full((N_OBS, len(AVAILABLE), N_VALIDATION), np.nan, dtype=np.float32)
 
 _MODEL_CACHE: dict = {}
 _STATUS_LOCK = threading.Lock()
@@ -441,13 +495,120 @@ _STATUS = dict(current=None, done=0, total=len(AVAILABLE), finished=False, error
 
 # This is by far the most expensive block in the whole app — a bounded AICc/
 # BIC stepwise SARIMA search (up to several minutes per variable) run for
-# every one of AVAILABLE. Cached to disk via cache_utils so a later run with
-# an unchanged spg.csv and N_VALIDATION loads every fitted model and the
-# whole SYNTHETIC_TENSOR straight from .cache/ instead of refitting.
+# every one of AVAILABLE. Its results are stored, so a later run with an
+# unchanged dataset and N_VALIDATION loads them in well under a second.
 _MODEL_SIG = make_signature(
-    CSV_PATH, version="synth-sarima-v1",
+    CSV_PATH, version="synth-sarima-v2",
     n_validation=N_VALIDATION, available=AVAILABLE,
 )
+STORE = ResultStore(DS.id, "synth_sarima")
+
+# what models.json keeps per variable (y, idx come back from the dataset)
+_STORED_KEYS = ("n", "mu_y", "sd_y", "periods", "powers", "seasonal_period", "adf_p",
+                "d_order", "n_skipped", "order_search", "best_order", "best_seasonal",
+                "best_aic", "best_bic", "best_aicc", "aic_winner", "bic_winner",
+                "params", "fit_enforce", "nlags_view", "moments_real", "moments_sim",
+                "sim_method", "burn_in")
+_TUPLE_KEYS = ("best_order", "best_seasonal")
+
+
+def _jsonable(v):
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.floating,)):
+        return float(v)
+    if isinstance(v, dict):
+        return {k: _jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    return v
+
+
+def _tuples(v):
+    """JSON turns tuples into lists; the UI formats orders as tuples."""
+    return tuple(_tuples(x) for x in v) if isinstance(v, list) else v
+
+
+def _save_results():
+    cols = [c for c in AVAILABLE if c in _MODEL_CACHE]
+    models = {c: {k: _jsonable(_MODEL_CACHE[c][k]) for k in _STORED_KEYS} for c in cols}
+
+    bank = {"t": np.tile(np.arange(N_OBS, dtype=np.int32), N_VALIDATION),
+            "realisation": np.repeat(np.arange(N_VALIDATION, dtype=np.int16), N_OBS)}
+    for c in cols:
+        sims = np.full((N_OBS, N_VALIDATION), np.nan, dtype=np.float32)
+        v = np.asarray(_MODEL_CACHE[c]["valid_sims"], dtype=np.float32)
+        sims[:len(v)] = v
+        bank[c] = sims.T.ravel()                 # row = realisation * N_OBS + t
+
+    val = []
+    for c in cols:
+        m = _MODEL_CACHE[c]
+        for stat in ("acf", "pacf"):
+            real, sim = np.asarray(m[f"{stat}_real"]), np.asarray(m[f"{stat}_sim"])
+            lags = np.arange(len(real), dtype=np.int16)
+            val.append(pd.DataFrame(dict(variable=c, stat=stat, lag=lags,
+                                         realisation=np.int16(-1), value=real.astype(np.float32))))
+            for k in range(sim.shape[1]):
+                val.append(pd.DataFrame(dict(variable=c, stat=stat, lag=lags,
+                                             realisation=np.int16(k),
+                                             value=sim[:, k].astype(np.float32))))
+    val_df = pd.concat(val, ignore_index=True)
+    val_df["variable"] = val_df["variable"].astype("category")
+    val_df["stat"] = val_df["stat"].astype("category")
+
+    with _STATUS_LOCK:
+        errors = dict(_STATUS["errors"])
+    STORE.write(_MODEL_SIG,
+                tables={"realisations": pd.DataFrame(bank), "validation": val_df},
+                json_files={"models": models},
+                meta=dict(sim_version=SIM_VERSION, n_realisations=N_VALIDATION,
+                          n_obs=N_OBS, variables=cols, errors=errors,
+                          description="SARIMA (Class-I) synthetic data: fitted orders and "
+                                      "coefficients, realisation bank, ACF/PACF validation"))
+    remove_cache("synth_sarima_models")          # the old ~2 GB pickle, if any
+
+
+def _load_results() -> bool:
+    """Fill _MODEL_CACHE and SYNTHETIC_TENSOR from stored results. False when
+    there are none for the current dataset/config (→ fit in the background)."""
+    if STORE.signature() != _MODEL_SIG:
+        return False
+    try:
+        models = STORE.read_json("models")
+        bank = STORE.read_table("realisations").sort_values(["realisation", "t"])
+        val = STORE.read_table("validation")
+    except Exception as e:                       # unreadable → recompute rather than crash
+        print(f"[synth_tab] stored results unreadable ({type(e).__name__}: {e}) — refitting")
+        return False
+    for col, rec in models.items():
+        if col not in FEATURE_INDEX:
+            continue
+        s_ser = DF[col].dropna()
+        m = dict(rec, col=col, y=s_ser.values.astype(float), idx=s_ser.index)
+        for k in _TUPLE_KEYS:
+            m[k] = tuple(m[k])
+        m["aic_winner"], m["bic_winner"] = _tuples(m["aic_winner"]), _tuples(m["bic_winner"])
+        m["order_search"] = [dict(r, order=tuple(r["order"]), seasonal=tuple(r["seasonal"]))
+                             for r in m["order_search"]]
+        m["periods"], m["powers"] = np.asarray(m["periods"]), np.asarray(m["powers"])
+
+        sims = bank[col].to_numpy().reshape(N_VALIDATION, N_OBS).T[:m["n"]]
+        if m["n"] == N_OBS:
+            SYNTHETIC_TENSOR[:, FEATURE_INDEX[col], :] = sims
+            m["valid_sims"] = SYNTHETIC_TENSOR[:, FEATURE_INDEX[col], :]
+        else:
+            m["valid_sims"] = sims
+
+        v = val[val["variable"] == col]
+        for stat in ("acf", "pacf"):
+            w = v[v["stat"] == stat].pivot(index="lag", columns="realisation", values="value")
+            m[f"{stat}_real"] = w[-1].to_numpy(dtype=float)
+            m[f"{stat}_sim"] = w[[k for k in w.columns if k >= 0]].to_numpy(dtype=float)
+        _MODEL_CACHE[col] = m
+    return True
 
 
 def _precompute_worker():
@@ -479,21 +640,21 @@ def _precompute_worker():
         with _STATUS_LOCK:
             _STATUS["done"] = i
     print(f"[synth_tab] Ready OK — tensor built in {time.time() - t_start:.1f}s total")
-    # Save to disk *before* flipping `finished`, so a consumer that reacts to
-    # finished=True (or a process that exits right after) can never observe
-    # a "done" state whose cache write is still in flight — the SARIMA
-    # payload is large enough (each fitted model carries its full Kalman
-    # filter state) that the write itself takes real, observable time.
-    save_cache("synth_sarima_models", _MODEL_SIG,
-               dict(tensor=SYNTHETIC_TENSOR, models=dict(_MODEL_CACHE), sim_version=SIM_VERSION))
+    # Store *before* flipping `finished`, so a consumer that reacts to
+    # finished=True (or a process that exits right after) never observes a
+    # "done" state whose write is still in flight.
+    try:
+        _save_results()
+    except Exception as e:                           # the app keeps working from memory
+        print(f"[synth_tab] could not store results — {type(e).__name__}: {e}")
     with _STATUS_LOCK:
         _STATUS["finished"] = True
         _STATUS["current"] = None
 
 
 def _resimulate_cached():
-    """Rebuild every cached model's validation ensemble with the current
-    simulation method (fits are kept — no refit), refill the tensor, re-save."""
+    """Rebuild every stored model's realisation bank with the current
+    simulation method (fits are kept — no refit), refill the tensor, re-store."""
     t0 = time.time()
     for col, m in _MODEL_CACHE.items():
         try:
@@ -504,21 +665,20 @@ def _resimulate_cached():
         if len(m["y"]) == N_OBS:
             SYNTHETIC_TENSOR[:, FEATURE_INDEX[col], :] = m["valid_sims"]
             m["valid_sims"] = SYNTHETIC_TENSOR[:, FEATURE_INDEX[col], :]
-    save_cache("synth_sarima_models", _MODEL_SIG,
-               dict(tensor=SYNTHETIC_TENSOR, models=dict(_MODEL_CACHE), sim_version=SIM_VERSION))
-    print(f"[synth_tab] Re-simulated cached fits with '{SIM_VERSION}' in {time.time() - t0:.1f}s")
+    _save_results()
+    print(f"[synth_tab] Re-simulated stored fits with '{SIM_VERSION}' in {time.time() - t0:.1f}s")
 
 
-_cached_models = load_cache("synth_sarima_models", _MODEL_SIG)
-if _cached_models is not None:
-    SYNTHETIC_TENSOR[...] = _cached_models["tensor"]
-    _MODEL_CACHE.update(_cached_models["models"])
-    if _cached_models.get("sim_version") != SIM_VERSION:
+_t_load = time.time()
+if _load_results():
+    if (STORE.manifest() or {}).get("sim_version") != SIM_VERSION:
         _resimulate_cached()
     with _STATUS_LOCK:
         _STATUS.update(done=len(AVAILABLE), total=len(AVAILABLE), finished=True, current=None)
-    print(f"[synth_tab] Loaded cached SARIMA fits + synthetic tensor for {len(_MODEL_CACHE)} "
-          "variables from .cache/ ✔  (delete .cache/ to force a full recompute)")
+    remove_cache("synth_sarima_models")
+    print(f"[synth_tab] Loaded stored SARIMA fits + {N_VALIDATION}-realisation bank for "
+          f"{len(_MODEL_CACHE)} variables from {STORE.dir.relative_to(STORE.dir.parents[2])} "
+          f"in {time.time() - _t_load:.2f}s ✔  (delete it to force a refit)")
 else:
     print(f"[synth_tab] Starting background SARIMA precompute for {len(AVAILABLE)} variables "
           f"(observations={N_OBS}, realizations={N_VALIDATION}) — the app serves immediately; "
@@ -541,6 +701,14 @@ def precompute_status() -> dict:
 #  SIMULATION HELPERS  (respond to the dashboard controls)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def pick_realisations(n_show: int, seed: int) -> np.ndarray:
+    """Which `n_show` of the stored realisations to draw: a reproducible,
+    seed-dependent subset, so changing the seed shows different members of
+    the bank without simulating anything."""
+    n_show = int(np.clip(n_show, 1, N_VALIDATION))
+    return np.sort(np.random.default_rng(seed).choice(N_VALIDATION, n_show, replace=False))
+
+
 def simulate_future(m: dict, horizon: int, n_sims: int, seed: int) -> np.ndarray:
     """n_sims realisations continuing `horizon` steps past the last observation,
     conditioned on the model's filtered state at that observation."""
@@ -548,8 +716,8 @@ def simulate_future(m: dict, horizon: int, n_sims: int, seed: int) -> np.ndarray
         return np.empty((0, n_sims))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        z_sims = _squeeze(m["res"].simulate(nsimulations=horizon, repetitions=n_sims,
-                                            anchor="end", random_state=seed))
+        z_sims = _squeeze(_results(m).simulate(nsimulations=horizon, repetitions=n_sims,
+                                               anchor="end", random_state=seed))
     z_sims = np.nan_to_num(z_sims, nan=0.0, posinf=0.0, neginf=0.0)
     return z_sims * m["sd_y"] + m["mu_y"]        # model was fit on z-scores
 
@@ -671,18 +839,17 @@ def fig_overlay(m: dict, n_sims: int, horizon: int, seed: int):
     ))
 
     if horizon <= 0:
-        n_show = max(1, min(int(n_sims), N_VALIDATION))
-        sims = m["valid_sims"][:, :n_show]      # tensor view stored on the model
-        for k in range(sims.shape[1]):
-            y_sim = _downsample(sims[:, k])
+        picks = pick_realisations(min(int(n_sims), N_SHOW_MAX), seed)
+        for k in picks:
+            y_sim = _downsample(m["valid_sims"][:, k])
             fig.add_trace(go.Scatter(
                 x=x_hist, y=y_sim, mode="lines",
                 name=f"Synthetic realisation {k+1}",
                 line=dict(color=SYN_C, width=1, dash="dot"), opacity=0.55,
                 hovertemplate=f"Synthetic #{k+1}: %{{y:.2f}}{unit}<extra></extra>",
             ))
-        mode_note = ("Alternate-history mode: each dotted line is one of the pre-computed "
-                     "realisations for this variable, read directly out of SYNTHETIC_TENSOR — "
+        mode_note = (f"Alternate-history mode: each dotted line is one of the {N_VALIDATION} "
+                     "stored realisations for this variable (the seed picks which) — "
                      "independent draws from the same fitted SARIMA model over the same historical "
                      "span, not a copy of the real data, but the same generative shape.")
     else:
@@ -697,7 +864,7 @@ def fig_overlay(m: dict, n_sims: int, horizon: int, seed: int):
                 line=dict(color=SYN_C, width=1.4, dash="dot"), opacity=0.75,
                 hovertemplate=f"Synthetic #{k+1}: %{{y:.2f}}{unit}<extra></extra>",
             ))
-        mode_note = (f"Future-projection mode: continuing {horizon}h past the last observation, "
+        mode_note = (f"Future-projection mode: continuing {horizon} {UNIT} past the last observation, "
                      "anchored on the model's filtered state — a plausible, not certain, future.")
 
     fig.update_xaxes(**_AX, title=None)
@@ -717,10 +884,12 @@ def fig_acf_compare(m: dict) -> go.Figure:
     color = COLORS.get(m["col"], ACCENT2)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")           # all-NaN lag rows are fine
-        sim_acf_lo  = np.nan_to_num(np.nanmin(acf_sim, axis=1))
-        sim_acf_hi  = np.nan_to_num(np.nanmax(acf_sim, axis=1))
-        sim_pacf_lo = np.nan_to_num(np.nanmin(pacf_sim, axis=1))
-        sim_pacf_hi = np.nan_to_num(np.nanmax(pacf_sim, axis=1))
+        # 5–95 % band across the realisation bank (min–max of 32 draws would
+        # be set by the two most extreme realisations alone)
+        sim_acf_lo  = np.nan_to_num(np.nanpercentile(acf_sim, 5, axis=1))
+        sim_acf_hi  = np.nan_to_num(np.nanpercentile(acf_sim, 95, axis=1))
+        sim_pacf_lo = np.nan_to_num(np.nanpercentile(pacf_sim, 5, axis=1))
+        sim_pacf_hi = np.nan_to_num(np.nanpercentile(pacf_sim, 95, axis=1))
 
     fig = make_subplots(rows=1, cols=2, horizontal_spacing=0.07, subplot_titles=["ACF", "PACF"])
     for col_i, (real, lo, hi) in enumerate(
@@ -755,13 +924,20 @@ def fig_dist_compare(m: dict) -> go.Figure:
     label = LABELS.get(col, col)
     unit = _unit_suffix(col)
     color = COLORS.get(col, ACCENT2)
-    sim_pool = m["valid_sims"].ravel()
+    sim_pool = np.asarray(m["valid_sims"], dtype=float).ravel()
+    sim_pool = sim_pool[np.isfinite(sim_pool)]
 
+    # Binned here, on shared edges, so the browser receives 2 × 40 bars
+    # instead of every raw value of the whole realisation bank.
+    lo, hi = np.nanmin(np.r_[m["y"], sim_pool]), np.nanmax(np.r_[m["y"], sim_pool])
+    edges = np.linspace(lo, hi if hi > lo else lo + 1.0, 41)
+    centers, width = 0.5 * (edges[:-1] + edges[1:]), edges[1] - edges[0]
     fig = go.Figure()
-    fig.add_trace(go.Histogram(x=m["y"], name="Real", histnorm="probability density",
-                               marker_color=color, opacity=0.55, nbinsx=40))
-    fig.add_trace(go.Histogram(x=sim_pool, name="Synthetic (pooled)", histnorm="probability density",
-                               marker_color=SYN_C, opacity=0.45, nbinsx=40))
+    for data, name, clr, op in ((m["y"], "Real", color, 0.55),
+                                (sim_pool, f"Synthetic (pooled, {N_VALIDATION} realisations)", SYN_C, 0.45)):
+        dens, _ = np.histogram(data, bins=edges, density=True)
+        fig.add_trace(go.Bar(x=centers, y=dens, width=width, name=name,
+                             marker_color=clr, opacity=op))
     fig.update_xaxes(**_AX, title=dict(text=f"{label}{unit}", standoff=4))
     fig.update_yaxes(**_AX, title=dict(text="density", standoff=4))
     fig.update_layout(**_base_layout(
@@ -1091,9 +1267,9 @@ tab_synth = dbc.Tab(
         ),
         html.Div([
             html.Div([
-                html.Label(f"Number of realisations (of {N_VALIDATION} stored)"),
-                dcc.Slider(id="synth-n-sims", min=1, max=N_VALIDATION, step=1, value=3,
-                          marks={i: str(i) for i in range(1, N_VALIDATION + 1)},
+                html.Label(f"Realisations shown (of {N_VALIDATION} stored)"),
+                dcc.Slider(id="synth-n-sims", min=1, max=N_SHOW_MAX, step=1, value=3,
+                          marks={i: str(i) for i in range(1, N_SHOW_MAX + 1)},
                           tooltip={"placement": "bottom", "always_visible": True}),
             ], className="ctrl-block-sm"),
             html.Div([
@@ -1105,7 +1281,7 @@ tab_synth = dbc.Tab(
                           tooltip={"placement": "bottom", "always_visible": True}),
             ], className="ctrl-block-sm"),
             html.Div([
-                html.Label("Random seed (future-projection only)"),
+                html.Label("Random seed (which stored realisations · future draws)"),
                 dcc.Input(id="synth-seed", type="number", value=42, min=0, step=1,
                          style={"width": "100px"}),
             ], className="ctrl-block"),
@@ -1121,7 +1297,7 @@ tab_synth = dbc.Tab(
         html.Div(id="synth-validation-desc", className="section-desc"),
         dcc.Loading(type="circle", color=ACCENT, children=[
             _plot_card([dcc.Graph(id="synth-acf-compare", config={"displayModeBar": False})],
-                       label=f"Real ACF/PACF vs synthetic band (min–max across {N_VALIDATION} realisations)"),
+                       label=f"Real ACF/PACF vs synthetic band (5–95 % across {N_VALIDATION} realisations)"),
             _plot_card([dcc.Graph(id="synth-dist-compare", config={"displayModeBar": False})],
                        label="Marginal distribution · real vs pooled synthetic"),
             html.Div(id="synth-moment-banner"),
@@ -1226,7 +1402,7 @@ def register_synth_callbacks(app):
         n_sims = int(n_sims or 1)
         horizon = int(horizon or 0)
         try:
-            seed = int(seed)
+            seed = abs(int(seed))
         except (TypeError, ValueError):
             seed = 42
 

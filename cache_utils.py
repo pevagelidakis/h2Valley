@@ -100,6 +100,22 @@ def load_cache(name: str, signature: str) -> Optional[Any]:
     return payload
 
 
+def remove_cache(name: str) -> None:
+    """Delete an obsolete cache file of the active dataset — e.g. after a
+    module moves its results to core.results. The pre-split flat copy
+    (.cache/<name>.pkl) is removed only for the default dataset: that layout
+    predates multi-dataset support, so it can only ever belong to it."""
+    from core.dataset import DEFAULT_CONFIG, _resolve, get_dataset
+    paths = [_path_for(name)]
+    if get_dataset().config_path.resolve() == _resolve(DEFAULT_CONFIG).resolve():
+        paths.append(_legacy_path_for(name))
+    for p in paths:
+        if p.exists():
+            size = p.stat().st_size / 1e6
+            p.unlink()
+            print(f"[cache_utils] removed obsolete '{p.relative_to(CACHE_DIR)}' ({size:.0f} MB)")
+
+
 def save_cache(name: str, signature: str, payload: Any) -> None:
     """Persist `payload` under `name`, tagged with `signature`. Writes to a
     temp file and renames atomically, so a crash mid-write can never leave

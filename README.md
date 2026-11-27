@@ -336,10 +336,15 @@ A **seasonal ARIMA (SARIMA)** model is identified per variable:
 3. **Bounded stepwise search** over (p, q, P, Q), scored by AICc with a BIC-parsimony
    rule (prefer the simpler model when AICc differs by ≤ 2), capped at 240 s per variable.
 
-Each fitted model is simulated **6 times** (independent realisations) into one shared
-tensor `SYNTHETIC_TENSOR[observations, variables, realisations]`, so switching variables
-in the UI is an instant lookup. Validation overlays ACF/PACF and moments of real vs.
-synthetic. You can also simulate **future** paths conditioned on the last observation.
+Each fitted model is simulated **32 times** (a bank of independent realisations) into one
+shared tensor `SYNTHETIC_TENSOR[observations, variables, realisations]`, so switching
+variables in the UI is an instant lookup; the seed picks which of the 32 are drawn (up to 8
+at once). Validation overlays real vs. synthetic ACF/PACF (5–95 % band across the bank) and
+moments. You can also simulate **future** paths conditioned on the last observation.
+
+Only the model **orders and coefficients** are stored, never the fitted statsmodels object:
+one Kalman-filter pass with the stored coefficients rebuilds it exactly (same likelihood,
+state and simulations) when a future projection needs it.
 
 ### 🎲 Synthetic Data II — statistical fidelity · `synth2_tab.py`
 
@@ -402,6 +407,8 @@ series less than the real series deviates from itself.
 │                          #   theory card). Standalone; runs on port 8051
 ├── cache_utils.py         # On-disk memoisation shared by every heavy computation
 ├── core/dataset.py        # DatasetSpec: loads the active dataset config, shared by every module
+├── core/insights.py       # Plain-language ACF/PACF/stationarity interpretation from results
+├── core/results.py        # ResultStore: results/<dataset>/<model>/ (Parquet + JSON + manifest)
 ├── configs/spg.yaml       # Dataset config: path, time axis, target, labels/units/groups, pairs
 ├── map_tab.py             # EU H₂ Map tab
 ├── synth_tab_control.py   # Synthetic Data I  (SARIMA)
@@ -465,8 +472,12 @@ Consequences worth knowing:
 - Because the signature includes the **absolute path and mtime**, a cache built on one
   machine (or outside Docker) is **not** reused inside a container. In Docker the cache
   lives in its own persistent volume instead (see [6.2](#62-docker-recommended)).
-- The SARIMA cache is ~1.9 GB (each fitted model keeps its full Kalman-filter state) and
-  is written only after all 20 variables finish. GENDA models are saved one per variable,
+- SARIMA results are not in `.cache/` but in `results/<dataset>/synth_sarima/`
+  (`models.json` with orders and coefficients, `realisations.parquet` with the 32-member bank,
+  `validation.parquet`, and a `manifest.json` naming the signature they were built from):
+  about 10 MB in total, loaded in a fraction of a second. They are written only after all
+  20 variables finish; delete the folder to force a refit. This is the layout every model
+  (and forecasting) is meant to use. GENDA models are saved one per variable,
   so an interrupted run keeps what it has finished.
 
 ### 5.4 How the UI stays responsive (callbacks and polling)
@@ -538,13 +549,13 @@ PyTorch). Then the app starts computing:
 | `[synth3_tab] GENDA trained for …` | GENDA models training in the background |
 | `Loaded cached … from .cache/ ✔` | Later starts: everything comes from cache |
 
-**Where the cache lives.** A named volume, `app_cache`, is mounted at the app's `.cache/`
-directory, so computed results survive restarts and image rebuilds. To force a full
+**Where the cache lives.** Two named volumes, `app_cache` (the app's `.cache/`) and
+`app_results` (its `results/`), keep computed results across restarts and image rebuilds. To force a full
 recompute:
 
 ```bash
 docker compose down
-docker volume rm h2valley-main_app_cache    # the name is prefixed with the project folder
+docker volume rm h2valley-main_app_cache h2valley-main_app_results   # prefixed with the project folder
 docker compose up -d
 ```
 
@@ -631,7 +642,7 @@ volume across, or let it compute once.
 | Significance level | `THRES` in `app.py` | 0.05 |
 | Granger max lag | `MAX_LAG_GC` in `app.py` | ¼ cycle = 6 |
 | Ljung–Box lags / HQC max lag / BG lags | `LB_LAGS`, `HQC_MAX_LAG`, `BG_LAGS` | ¼, ½, 1 cycle = [6, 12, 24] / 12 / 12 |
-| SARIMA realisations | `N_VALIDATION` in `synth_tab_control.py` | 6 |
+| SARIMA realisations stored / shown at once | `N_VALIDATION`, `N_SHOW_MAX` in `synth_tab_control.py` | 32 / 8 |
 | SARIMA search budget | `SEARCH_BUDGET_S` in `synth_tab_control.py` | 240 s per variable |
 | RQA window / target RR | `WINDOW_DEFAULT`, `RR_DEFAULT` in `rqa_tab.py` | 300 h / 10% |
 | GENDA training | `GENDA_*` in `synth3_funs.py`; `GENDA_THREADS` in `synth3_tab.py` | 40 epochs; 4 threads |
@@ -667,7 +678,7 @@ Measured on a 14-core Windows PC under Docker Desktop (WSL2). Your numbers will 
 | Statistical test battery | **Yes** | a few minutes | seconds |
 | RQA identification | No | ~15 s | instant |
 | Synthetic Data II identification | No | ~1 min | instant |
-| SARIMA fits (20 variables) | No | ~18 min | load ~1.9 GB from disk |
+| SARIMA fits (20 variables) | No | ~18–20 min | load ~10 MB in < 1 s |
 | GENDA training (per variable) | No | ~15–40 s each | instant |
 
 Memory: ~2.5 GB for the app once everything is loaded.
@@ -723,7 +734,7 @@ follow the project's Data Management Plan (FAIR principles).
 - PV is a proxy; see [1.2](#12-why-a-solar-dataset-stands-in-for-hydrogen) for what does
   not transfer to electrolysers.
 - No authentication; single gunicorn worker (by design, due to in-memory model state).
-- The SARIMA cache is large (~1.9 GB) and rebuilt from scratch whenever `spg.csv` changes.
+- SARIMA models are refit from scratch (~20 min) whenever `spg.csv` changes.
 
 > Fill in before publishing: exact source and licence of `spg.csv` and the IEA files,
 > project name, funding/grant agreement number, and institutional affiliation.
